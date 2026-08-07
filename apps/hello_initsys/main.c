@@ -7,30 +7,35 @@ extern int __libc_spawn(const char *name, char *const argv[], char *const envp[]
 int main(int argc, char **argv) {
     printf("[hello_initsys] init starting\n");
 
-    int have_child = 0;
+    char *default_argv[] = { (char *)"sh", 0 };
+    const char *name;
+    char **cmd_argv;
     if (argc > 1) {
-        int rc = __libc_spawn(argv[1], argv + 1, environ);
-        if (rc < 0) {
-            printf("[hello_initsys] failed to start '%s'\n", argv[1]);
-        } else {
-            printf("[hello_initsys] started '%s' as tid=%d\n", argv[1], rc);
-            have_child = 1;
-        }
+        name = argv[1];
+        cmd_argv = argv + 1;
     } else {
-        printf("[hello_initsys] no command given, idling\n");
+        name = "sh";
+        cmd_argv = default_argv;
     }
 
     for (;;) {
-        if (!have_child) {
+        int rc = __libc_spawn(name, cmd_argv, environ);
+        if (rc < 0) {
+            printf("[hello_initsys] failed to start '%s'\n", name);
             sleep(1);
             continue;
         }
-        int status;
-        pid_t child = wait(&status);
-        if (child > 0) {
+        printf("[hello_initsys] started '%s' as tid=%d\n", name, rc);
+        for (;;) {
+            int status;
+            pid_t child = wait(&status);
+            if (child < 0) {
+                break;
+            }
             printf("[hello_initsys] tid=%d exited status=%d\n", child, WEXITSTATUS(status));
-        } else {
-            have_child = 0;
+            if (child == rc) {
+                break;
+            }
         }
     }
 }
