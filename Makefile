@@ -167,7 +167,11 @@ $(APPS_BUILD_DIR)/stub/stub: $(APPS_BUILD_DIR)/stub/stub.c.o apps/link/stub.ld
 	    $(APPS_BUILD_DIR)/stub/stub.c.o
 
 ROOTFS_STAGE := $(BUILD_DIR)/rootfs-stage
-ROOTFS_STUB_NAMES := root_task ls cat touch tail file find cp mv
+# ls/cat/touch/tail/cp are real minibox applets; aliasing them to the minibox
+# binary (which dispatches on argv[0]) lets a direct `__libc_spawn("ls", ...)`
+# resolve to the real command instead of shadowing it behind a no-op stub.
+ROOTFS_MINIBOX_ALIASES := ls cat touch tail cp
+ROOTFS_STUB_NAMES := root_task file find mv
 
 $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/ramfs \
                          $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
@@ -184,6 +188,7 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
 	cp $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(ROOTFS_STAGE)/hello_initsys
 	cp $(APPS_BUILD_DIR)/minibox/minibox $(ROOTFS_STAGE)/minibox
 	cp $(APPS_BUILD_DIR)/sh/sh $(ROOTFS_STAGE)/sh
+	for n in $(ROOTFS_MINIBOX_ALIASES); do cp $(APPS_BUILD_DIR)/minibox/minibox $(ROOTFS_STAGE)/$$n; done
 	for n in $(ROOTFS_STUB_NAMES); do cp $(APPS_BUILD_DIR)/stub/stub $(ROOTFS_STAGE)/$$n; done
 	(cd $(ROOTFS_STAGE) && tar --format ustar -cf $(abspath $@) $$(ls))
 
