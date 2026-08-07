@@ -95,6 +95,10 @@ FILE *fopen(const char *path, const char *mode) {
     errno = ENOSYS;
     return 0;
 }
+FILE *freopen(const char *path, const char *mode, FILE *stream) {
+    (void)stream;
+    return fopen(path, mode);
+}
 FILE *fdopen(int fd, const char *mode) {
     (void)mode;
     if (fd == 0) {

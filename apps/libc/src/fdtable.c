@@ -1,5 +1,6 @@
 #include <unistd.h>
 #include <fcntl.h>
+#include <utime.h>
 #include <sys/stat.h>
 #include <errno.h>
 #include <string.h>
@@ -642,12 +643,21 @@ int isatty(int fd) {
     return fd_valid(fd) && fd_table[fd].kind == FD_DEVFS
         && fd_table[fd].handle == DEV_CONSOLE;
 }
+char *ttyname(int fd) {
+    if (!isatty(fd)) {
+        errno = ENOTTY;
+        return 0;
+    }
+    return (char *)"/dev/console";
+}
 int fsync(int fd) {
     if (!fd_valid(fd)) {
         errno = EBADF;
         return -1;
     }
     return 0;
+}
+void sync(void) {
 }
 int access(const char *path, int mode) {
     (void)mode;
@@ -947,6 +957,16 @@ int mknodat(int dirfd, const char *path, mode_t mode, dev_t dev) {
     (void)dev;
     errno = ENOSYS;
     return -1;
+}
+int mknod(const char *path, mode_t mode, dev_t dev) {
+    return mknodat(AT_FDCWD, path, mode, dev);
+}
+int utime(const char *path, const struct utimbuf *times) {
+    (void)times;
+    if (access(path, F_OK) != 0) {
+        return -1;
+    }
+    return 0;
 }
 int rename(const char *oldpath, const char *newpath) {
     char roldpath[RESOLVED_PATH_MAX], rnewpath[RESOLVED_PATH_MAX];

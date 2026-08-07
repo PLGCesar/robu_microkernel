@@ -31,6 +31,8 @@ struct tm *localtime_r(const time_t *timep, struct tm *result);
 struct tm *gmtime_r(const time_t *timep, struct tm *result);
 char *strptime(const char *s, const char *format, struct tm *tm);
 void tzset(void);
+char *asctime(const struct tm *tm);
+char *ctime(const time_t *timep);
 #define CLOCK_REALTIME 0
 #define CLOCK_MONOTONIC 1
 #endif

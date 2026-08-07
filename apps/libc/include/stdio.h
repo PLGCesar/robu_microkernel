@@ -15,6 +15,7 @@ extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
 FILE *fopen(const char *path, const char *mode);
+FILE *freopen(const char *path, const char *mode, FILE *stream);
 FILE *fdopen(int fd, const char *mode);
 FILE *fmemopen(void *buf, size_t size, const char *mode);
 int fscanf(FILE *f, const char *fmt, ...);

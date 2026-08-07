@@ -35,3 +35,7 @@ void exit(int status) {
     fflush(NULL);
     _exit(status);
 }
+void abort(void) {
+    fflush(NULL);
+    _exit(134);
+}
