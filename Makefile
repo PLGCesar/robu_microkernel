@@ -40,9 +40,12 @@ ASM_SRCS := $(wildcard $(ARCH_DIR)/src/*.S)
 
 OBJS := $(C_SRCS:%.c=$(BUILD_DIR)/%.c.o) $(ASM_SRCS:%.S=$(BUILD_DIR)/%.S.o)
 
-.PHONY: all clean mlibc minibox
+.PHONY: all clean mlibc minibox run
 
 all: $(BUILD_DIR)/$(TARGET)
+
+clean:
+	rm -rf $(BUILD_DIR)
 
 $(BUILD_DIR)/$(TARGET): $(OBJS)
 	@mkdir -p $(@D)
@@ -142,6 +145,43 @@ mlibc:
 	fi
 	ninja -C $(MLIBC_BUILD_DIR)
 	DESTDIR=$(MLIBC_SYSROOT) ninja -C $(MLIBC_BUILD_DIR) install
+
+$(APPS_BUILD_DIR)/stub/stub.c.o: apps/stub/stub.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(APPS_BUILD_DIR)/stub/stub: $(APPS_BUILD_DIR)/stub/stub.c.o apps/link/stub.ld
+	$(LD) $(APP_LDFLAGS) -T apps/link/stub.ld -e _start -o $@ \
+	    $(APPS_BUILD_DIR)/stub/stub.c.o
+
+ROOTFS_STAGE := $(BUILD_DIR)/rootfs-stage
+ROOTFS_STUB_NAMES := hello_service hello_task root_task sh ls cat touch tail file find cp mv
+
+$(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/ramfs \
+                         $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
+                         $(APPS_BUILD_DIR)/hello_initsys/hello_initsys \
+                         $(APPS_BUILD_DIR)/minibox/minibox \
+                         $(APPS_BUILD_DIR)/stub/stub
+	rm -rf $(ROOTFS_STAGE)
+	mkdir -p $(ROOTFS_STAGE)
+	cp $(APPS_BUILD_DIR)/devfs/devfs $(ROOTFS_STAGE)/devfs
+	cp $(APPS_BUILD_DIR)/ramfs/ramfs $(ROOTFS_STAGE)/ramfs
+	cp $(APPS_BUILD_DIR)/procfs/procfs $(ROOTFS_STAGE)/procfs
+	cp $(APPS_BUILD_DIR)/sysfs/sysfs $(ROOTFS_STAGE)/sysfs
+	cp $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(ROOTFS_STAGE)/hello_initsys
+	cp $(APPS_BUILD_DIR)/minibox/minibox $(ROOTFS_STAGE)/minibox
+	for n in $(ROOTFS_STUB_NAMES); do cp $(APPS_BUILD_DIR)/stub/stub $(ROOTFS_STAGE)/$$n; done
+	(cd $(ROOTFS_STAGE) && tar --format ustar -cf $(abspath $@) $$(ls))
+
+QEMU ?= qemu-system-x86_64
+QEMU_SMP ?= 2
+QEMU_MEM ?= 256
+QEMU_APPEND ?= apps=hello_service,hello_task root=root_task starter=hello_initsys
+
+run: $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/rootfs.tar
+	$(QEMU) -kernel $(BUILD_DIR)/$(TARGET) -initrd $(BUILD_DIR)/rootfs.tar \
+	    -append "$(QEMU_APPEND)" -smp $(QEMU_SMP) -m $(QEMU_MEM) \
+	    -nographic -device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 APP_BINS := $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
             $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(APPS_BUILD_DIR)/minibox/minibox \
