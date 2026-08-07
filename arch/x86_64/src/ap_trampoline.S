@@ -1,35 +1,3 @@
-/*
- * AP trampoline: real mode -> 32-bit protected mode -> 64-bit long
- * mode, landing in ap_entry() (C, arch/x86_64/src/smp.c). Copied byte-
- * for-byte to a fixed physical address (AP_TRAMPOLINE_PADDR) before
- * any SIPI is sent -- the same "raw bytes, position-independent,
- * start/end symbols" technique already used for the ring-3 payloads
- * (stage 2A/2B), just targeting a fixed low physical address instead
- * of a per-process virtual one.
- *
- * The AP starts here in real mode with CS = AP_TRAMPOLINE_VECTOR<<8,
- * IP=0 -- the SIPI hardware contract puts CS:IP at exactly this blob's
- * own physical location. Every label reference in the 16-bit portion
- * is therefore expressed as an offset from ap_trampoline_start (label
- * arithmetic the assembler resolves at assemble time), never as an
- * absolute address: the linker assigns this whole file addresses
- * around the kernel's own 1 MiB+ load address, which has nothing to do
- * with where these bytes actually end up living once copied.
- *
- * lgdt and the far jump both need a 32-bit (not the legacy 16-bit)
- * operand size even while still executing 16-bit code -- forced with
- * an explicit 0x66 prefix on lgdt (`ljmpl` already requests it for the
- * jump). Getting this wrong would silently truncate the addresses
- * being loaded; verified by disassembly, not just by the boot working.
- *
- * Once in 32-bit protected mode the flat GDT below covers all 4 GiB,
- * so ordinary absolute addressing works again -- including reaching
- * kernel symbols like boot_pml4 and kernel_gdt_ptr directly, since
- * this trampoline was copied next to a kernel that is still identity-
- * mapped and whose real, permanent GDT already exists by this point
- * (the AP is only ever woken after the BSP finishes its own init).
- */
-
 #include "smp.h"
 
 .section .rodata
