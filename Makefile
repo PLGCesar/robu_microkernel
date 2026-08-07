@@ -133,6 +133,18 @@ $(APPS_BUILD_DIR)/minibox/minibox: $(MINIBOX_OBJS) $(LIBC_SHIM_OBJS) apps/link/m
 
 minibox: $(APPS_BUILD_DIR)/minibox/minibox
 
+SH_CFLAGS := $(LIBC_SHIM_CFLAGS) -Wno-unused-parameter -Wno-sign-compare
+
+$(APPS_BUILD_DIR)/sh/minibox-shell.c.o: apps/minibox/minibox-shell/minibox-shell.c
+	@mkdir -p $(@D)
+	$(CC) $(SH_CFLAGS) -c $< -o $@
+
+$(APPS_BUILD_DIR)/sh/sh: $(APPS_BUILD_DIR)/sh/minibox-shell.c.o $(LIBC_SHIM_OBJS) apps/link/sh.ld
+	$(LD) $(APP_LDFLAGS) -T apps/link/sh.ld -e _start -o $@ \
+	    $(APPS_BUILD_DIR)/sh/minibox-shell.c.o $(LIBC_SHIM_OBJS)
+
+sh: $(APPS_BUILD_DIR)/sh/sh
+
 MLIBC_DIR := apps/mlibc
 MLIBC_BUILD_DIR := $(BUILD_DIR)/mlibc
 MLIBC_SYSROOT := $(abspath $(BUILD_DIR)/mlibc-sysroot)
@@ -155,12 +167,13 @@ $(APPS_BUILD_DIR)/stub/stub: $(APPS_BUILD_DIR)/stub/stub.c.o apps/link/stub.ld
 	    $(APPS_BUILD_DIR)/stub/stub.c.o
 
 ROOTFS_STAGE := $(BUILD_DIR)/rootfs-stage
-ROOTFS_STUB_NAMES := root_task sh ls cat touch tail file find cp mv
+ROOTFS_STUB_NAMES := root_task ls cat touch tail file find cp mv
 
 $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/ramfs \
                          $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
                          $(APPS_BUILD_DIR)/hello_initsys/hello_initsys \
                          $(APPS_BUILD_DIR)/minibox/minibox \
+                         $(APPS_BUILD_DIR)/sh/sh \
                          $(APPS_BUILD_DIR)/stub/stub
 	rm -rf $(ROOTFS_STAGE)
 	mkdir -p $(ROOTFS_STAGE)
@@ -170,6 +183,7 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
 	cp $(APPS_BUILD_DIR)/sysfs/sysfs $(ROOTFS_STAGE)/sysfs
 	cp $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(ROOTFS_STAGE)/hello_initsys
 	cp $(APPS_BUILD_DIR)/minibox/minibox $(ROOTFS_STAGE)/minibox
+	cp $(APPS_BUILD_DIR)/sh/sh $(ROOTFS_STAGE)/sh
 	for n in $(ROOTFS_STUB_NAMES); do cp $(APPS_BUILD_DIR)/stub/stub $(ROOTFS_STAGE)/$$n; done
 	(cd $(ROOTFS_STAGE) && tar --format ustar -cf $(abspath $@) $$(ls))
 
