@@ -1,0 +1,103 @@
+#include "robu/types.h"
+#include "robu/kprintf.h"
+#include "robu/sched.h"
+#include "robu/elf.h"
+#include "robu/cmdline.h"
+#include "robu/ramfs.h"
+#include "robu/rootfs.h"
+#include "../boot.h"
+
+tcb_t *toybox_spawn(const char *name, int argc, const char *const *argv, uint8_t prio) {
+    const uint8_t *elf_start, *elf_end;
+    if (rootfs_lookup(name, &elf_start, &elf_end) != 0) {
+        kprintf("[boot] FATAL: rootfs has no entry named '%s'\n", name);
+        for (;;) { asm volatile("cli; hlt"); }
+    }
+    tcb_t *t = elf_load_and_spawn_argv(name, elf_start, elf_end, prio, PAGER_TID, argc, argv);
+    if (!t) {
+        kprintf("[boot] FATAL: %s failed to load\n", name);
+        for (;;) { asm volatile("cli; hlt"); }
+    }
+    kprintf("[boot] toybox %s: tid=%u\n", name, t->tid);
+    return t;
+}
+
+void toybox_cmd_init_arg(const char *name, uint8_t prio, const char *arg1) {
+    char flag[32] = "toybox_";
+    size_t i = 0;
+    while (name[i] && i < sizeof(flag) - 8) {
+        flag[7 + i] = name[i];
+        i++;
+    }
+    flag[7 + i] = '\0';
+    if (!cmdline_get(flag)) {
+        return;
+    }
+    if (arg1) {
+        const char *argv[2];
+        argv[0] = name;
+        argv[1] = arg1;
+        toybox_spawn(name, 2, argv, prio);
+        return;
+    }
+    const char *argv[1];
+    argv[0] = name;
+    toybox_spawn(name, 1, argv, prio);
+}
+
+void toybox_cmd_init(const char *name, uint8_t prio) {
+    toybox_cmd_init_arg(name, prio, NULL);
+}
+
+typedef struct {
+    const char *name;
+    const char *argv[4];
+    int argc;
+} pipeline_step_t;
+
+static const pipeline_step_t toybox_pipeline_steps[] = {
+    { "touch", { "touch", "/touched.txt" }, 2 },
+    { "cat",   { "cat", "/greeting.txt" }, 2 },
+    { "ls",    { "ls", "/" }, 2 },
+    { "cp",    { "cp", "/greeting.txt", "/copy.txt" }, 3 },
+    { "mv",    { "mv", "/copy.txt", "/renamed.txt" }, 3 },
+    { "tail",  { "tail", "/renamed.txt" }, 2 },
+    { "find",  { "find", "/", "-name", "renamed.txt" }, 4 },
+};
+#define TOYBOX_PIPELINE_STEP_COUNT \
+    (sizeof(toybox_pipeline_steps) / sizeof(toybox_pipeline_steps[0]))
+
+static int toybox_pipeline_active;
+static uint64_t toybox_pipeline_index;
+
+void toybox_pipeline_advance(void) {
+    if (!toybox_pipeline_active) {
+        return;
+    }
+    if (toybox_pipeline_index >= TOYBOX_PIPELINE_STEP_COUNT) {
+        kprintf("[toybox-pipeline] all %lu step(s) complete\n",
+                (uint64_t)TOYBOX_PIPELINE_STEP_COUNT);
+        toybox_pipeline_active = 0;
+        return;
+    }
+    const pipeline_step_t *step = &toybox_pipeline_steps[toybox_pipeline_index];
+    toybox_spawn(step->name, step->argc, step->argv, 9);
+    toybox_pipeline_index++;
+}
+
+void toybox_pipeline_init(void) {
+    if (!cmdline_get("toybox_pipeline")) {
+        return;
+    }
+    static const char greeting[] = "hello from the toybox port\n";
+    int64_t h = ramfs_open("greeting.txt", RAMFS_O_CREAT | RAMFS_O_TRUNC);
+    if (h < 0) {
+        kprintf("[boot] FATAL: could not seed /greeting.txt in ramfs\n");
+        for (;;) { asm volatile("cli; hlt"); }
+    }
+    ramfs_write((uint64_t)h, greeting, sizeof(greeting) - 1);
+    ramfs_close((uint64_t)h);
+    toybox_pipeline_active = 1;
+    toybox_pipeline_index = 0;
+    toybox_pipeline_advance();
+}
