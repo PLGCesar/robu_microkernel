@@ -5,7 +5,6 @@
 #include "robu/vm.h"
 #include "robu/pmm.h"
 #include "robu/uipc.h"
-#include "robu/elf.h"
 #include "robu/kinfo.h"
 #include "robu/cmdline.h"
 #include "robu/untyped.h"
@@ -136,24 +135,12 @@ void kmain(void) {
     thread_create("pager", pager_entry, stack_pager + STACK_SIZE, 18);
     thread_create("monitor", monitor_entry, stack_monitor + STACK_SIZE, 14);
     test_report_init();
-    ipc_echo_demo_init();
     thread_create("console-in", console_in_entry, stack_console_in + STACK_SIZE, 20);
-    ring3_task_demo_init();
-    mmio_demo_init();
-    xfer_demo_init();
-    crash_kernel_demo_init();
-    shm_demo_init();
-    batch_demo_init();
-    async_demo_init();
-    sfi_demo_init();
-    app_resilience_demo_init();
-    elf_load_and_spawn("hello-task", task_elf_start, task_elf_end, 5, PAGER_TID);
     root_task_init(untyped_base, UNTYPED_REGION_SIZE);
     devfs_init();
     ramfs_init();
     procfs_init();
     sysfs_init();
-    devfs_demo_init();
     bench_init();
     abitest_init(untyped_base, UNTYPED_REGION_SIZE);
     argvtest_init();
@@ -175,9 +162,6 @@ void kmain(void) {
     spawntest_init();
     consoletest_init();
     toybox_sh_c_init();
-    timer_demo_init(untyped_base);
-    revoke_demo_init(untyped_base);
-    notif_latency_demo_init(untyped_base);
 
     scheduler_ready = 1;
     sched_start();

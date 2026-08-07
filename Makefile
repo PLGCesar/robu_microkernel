@@ -155,7 +155,7 @@ $(APPS_BUILD_DIR)/stub/stub: $(APPS_BUILD_DIR)/stub/stub.c.o apps/link/stub.ld
 	    $(APPS_BUILD_DIR)/stub/stub.c.o
 
 ROOTFS_STAGE := $(BUILD_DIR)/rootfs-stage
-ROOTFS_STUB_NAMES := hello_service hello_task root_task sh ls cat touch tail file find cp mv
+ROOTFS_STUB_NAMES := root_task sh ls cat touch tail file find cp mv
 
 $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/ramfs \
                          $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
@@ -176,7 +176,7 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
 QEMU ?= qemu-system-x86_64
 QEMU_SMP ?= 2
 QEMU_MEM ?= 256
-QEMU_APPEND ?= apps=hello_service,hello_task root=root_task starter=hello_initsys
+QEMU_APPEND ?= root=root_task starter=hello_initsys
 
 run: $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/rootfs.tar
 	$(QEMU) -kernel $(BUILD_DIR)/$(TARGET) -initrd $(BUILD_DIR)/rootfs.tar \
