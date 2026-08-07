@@ -18,7 +18,6 @@ tcb_t *toybox_spawn(const char *name, int argc, const char *const *argv, uint8_t
         kprintf("[boot] FATAL: %s failed to load\n", name);
         for (;;) { asm volatile("cli; hlt"); }
     }
-    kprintf("[boot] toybox %s: tid=%u\n", name, t->tid);
     return t;
 }
 
@@ -75,8 +74,6 @@ void toybox_pipeline_advance(void) {
         return;
     }
     if (toybox_pipeline_index >= TOYBOX_PIPELINE_STEP_COUNT) {
-        kprintf("[toybox-pipeline] all %lu step(s) complete\n",
-                (uint64_t)TOYBOX_PIPELINE_STEP_COUNT);
         toybox_pipeline_active = 0;
         return;
     }

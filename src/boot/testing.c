@@ -99,14 +99,6 @@ static void test_report_entry(void) {
                 if (!c) break;
                 name[nlen++] = (char)c;
             }
-            {
-                tcb_t *exiting = sched_get_tcb(from);
-                int is_interactive_child = (exiting && g_sh_tid && exiting->parent_tid == g_sh_tid)
-                                          || (g_sh_tid && from == g_sh_tid);
-                if (!is_interactive_child) {
-                    kprintf("[toybox-exit] name='%s' status=%ld\n", name, (int64_t)m.word[1]);
-                }
-            }
             toybox_pipeline_advance();
             if (g_sh_tid && from == g_sh_tid) {
                 int status = (int)(int64_t)m.word[1];
