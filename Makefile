@@ -40,7 +40,7 @@ ASM_SRCS := $(wildcard $(ARCH_DIR)/src/*.S)
 
 OBJS := $(C_SRCS:%.c=$(BUILD_DIR)/%.c.o) $(ASM_SRCS:%.S=$(BUILD_DIR)/%.S.o)
 
-.PHONY: all clean
+.PHONY: all clean mlibc minibox
 
 all: $(BUILD_DIR)/$(TARGET)
 
@@ -127,6 +127,21 @@ $(MINIBOX_OBJS): $(APPS_BUILD_DIR)/minibox/%.c.o: apps/minibox/%.c
 $(APPS_BUILD_DIR)/minibox/minibox: $(MINIBOX_OBJS) $(LIBC_SHIM_OBJS) apps/link/minibox.ld
 	$(LD) $(APP_LDFLAGS) -T apps/link/minibox.ld -e _start -o $@ \
 	    $(MINIBOX_OBJS) $(LIBC_SHIM_OBJS)
+
+minibox: $(APPS_BUILD_DIR)/minibox/minibox
+
+MLIBC_DIR := apps/mlibc
+MLIBC_BUILD_DIR := $(BUILD_DIR)/mlibc
+MLIBC_SYSROOT := $(abspath $(BUILD_DIR)/mlibc-sysroot)
+MLIBC_CROSS := apps/mlibc-robu-cross.ini
+
+mlibc:
+	@if [ ! -f $(MLIBC_BUILD_DIR)/build.ninja ]; then \
+	    meson setup $(MLIBC_BUILD_DIR) $(MLIBC_DIR) --cross-file $(MLIBC_CROSS) \
+	        -Dlibgcc_dependency=false -Ddefault_library=static --prefix=/usr; \
+	fi
+	ninja -C $(MLIBC_BUILD_DIR)
+	DESTDIR=$(MLIBC_SYSROOT) ninja -C $(MLIBC_BUILD_DIR) install
 
 APP_BINS := $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
             $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(APPS_BUILD_DIR)/minibox/minibox \
