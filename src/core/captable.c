@@ -1,0 +1,312 @@
+#include "robu/captable.h"
+#include "robu/untyped.h"
+#include "robu/vm.h"
+#include "robu/sched.h"
+#include "robu/ipc.h"
+#include "robu/arch.h"
+#define ROOT_CHILD_PAGER_TID 1
+#define ROOT_CHILD_PRIO      5
+#define ROOT_OWN_FRAME_VA 0x71000000ULL
+static kcap_t kcap_table[MAX_KCAPS];
+static uint32_t kcap_count;
+int kcap_grant(tid_t owner, cap_kind_t kind, uint64_t addr, uint64_t size) {
+    if (kcap_count >= MAX_KCAPS) {
+        return -1;
+    }
+    kcap_table[kcap_count].kind = kind;
+    kcap_table[kcap_count].owner = owner;
+    kcap_table[kcap_count].addr = addr;
+    kcap_table[kcap_count].size = size;
+    kcap_count++;
+    return 0;
+}
+uint32_t kcap_next_slot(void) {
+    return kcap_count;
+}
+static const kcap_t *validate(tid_t caller, uint32_t slot, cap_kind_t want_kind) {
+    if (slot >= kcap_count) {
+        return NULL;
+    }
+    const kcap_t *c = &kcap_table[slot];
+    if (c->owner != caller || c->kind != want_kind) {
+        return NULL;
+    }
+    return c;
+}
+#define MAX_NOTIFICATIONS 16
+typedef struct {
+    uint64_t word;
+    tid_t waiter;
+    int in_use;
+} notification_t;
+static notification_t notif_table[MAX_NOTIFICATIONS];
+static uint32_t notif_count;
+#define MAX_TIMERS 16
+typedef struct {
+    int in_use;
+    int armed;
+    uint64_t deadline_tick;
+    int notif_idx;
+    uint64_t signal_bits;
+    uint64_t period_ticks;
+} timer_obj_t;
+static timer_obj_t timer_table[MAX_TIMERS];
+static uint32_t timer_count;
+static void notif_deliver(int idx, uint64_t bits) {
+    notification_t *n = &notif_table[idx];
+    n->word |= bits;
+    if (n->waiter != 0) {
+        tcb_t *w = sched_get_tcb(n->waiter);
+        if (w) {
+            w->uctx.r8 = n->word;
+            w->uctx.rax = (uint64_t)IPC_ERR_NONE;
+            sched_wake(w);
+        }
+        n->word = 0;
+        n->waiter = 0;
+    }
+}
+int cap_retype(tid_t caller, uint32_t untyped_slot, uint32_t kind,
+               uint64_t as_slot, uint64_t entry, uint64_t stack, uint64_t frame_slot,
+               uint64_t *out_slot, uint64_t *out_addr) {
+    if (!validate(caller, untyped_slot, CAP_KIND_UNTYPED)) {
+        return -1;
+    }
+    tcb_t *caller_tcb = sched_get_tcb(caller);
+    if (!caller_tcb) {
+        return -1;
+    }
+    switch ((cap_kind_t)kind) {
+    case CAP_KIND_FRAME: {
+        paddr_t frame = untyped_alloc(PAGE_SIZE_4K);
+        if (!frame) {
+            return -1;
+        }
+        uint64_t mapped_va = 0;
+        if (arch_vm_translate(caller_tcb->address_space, ROOT_OWN_FRAME_VA) == 0) {
+            if (arch_vm_map_page(caller_tcb->address_space, ROOT_OWN_FRAME_VA, frame,
+                                  VM_PROT_READ | VM_PROT_WRITE | VM_PROT_USER) != 0) {
+                return -1;
+            }
+            mapped_va = ROOT_OWN_FRAME_VA;
+        }
+        if (kcap_grant(caller, CAP_KIND_FRAME, frame, PAGE_SIZE_4K) != 0) {
+            return -1;
+        }
+        kcap_table[kcap_count - 1].mapped_va = mapped_va;
+        *out_slot = kcap_count - 1;
+        *out_addr = frame;
+        return 0;
+    }
+    case CAP_KIND_ADDRSPACE: {
+        if (!untyped_alloc(PAGE_SIZE_4K)) {
+            return -1;
+        }
+        paddr_t as = vm_address_space_create();
+        if (!as) {
+            return -1;
+        }
+        if (kcap_grant(caller, CAP_KIND_ADDRSPACE, as, 0) != 0) {
+            return -1;
+        }
+        *out_slot = kcap_count - 1;
+        *out_addr = as;
+        return 0;
+    }
+    case CAP_KIND_TCB: {
+        const kcap_t *as_cap = validate(caller, (uint32_t)as_slot, CAP_KIND_ADDRSPACE);
+        if (!as_cap) {
+            return -1;
+        }
+        const kcap_t *frame_cap = validate(caller, (uint32_t)frame_slot, CAP_KIND_FRAME);
+        if (!frame_cap) {
+            return -1;
+        }
+        if (!untyped_alloc(PAGE_SIZE_4K)) {
+            return -1;
+        }
+        if (arch_vm_map_page((paddr_t)as_cap->addr, (vaddr_t)entry, (paddr_t)frame_cap->addr,
+                              VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC | VM_PROT_USER) != 0) {
+            return -1;
+        }
+        tcb_t *t = thread_create_user_locked("root-child", (vaddr_t)entry, (vaddr_t)stack,
+                                             ROOT_CHILD_PRIO, (paddr_t)as_cap->addr,
+                                             ROOT_CHILD_PAGER_TID);
+        if (!t) {
+            return -1;
+        }
+        if (kcap_grant(caller, CAP_KIND_TCB, t->tid, 0) != 0) {
+            return -1;
+        }
+        *out_slot = kcap_count - 1;
+        *out_addr = t->tid;
+        return 0;
+    }
+    case CAP_KIND_NOTIFICATION: {
+        if (notif_count >= MAX_NOTIFICATIONS) {
+            return -1;
+        }
+        if (!untyped_alloc(PAGE_SIZE_4K)) {
+            return -1;
+        }
+        uint32_t idx = notif_count++;
+        notif_table[idx].word = 0;
+        notif_table[idx].waiter = 0;
+        notif_table[idx].in_use = 1;
+        if (kcap_grant(caller, CAP_KIND_NOTIFICATION, idx, 0) != 0) {
+            return -1;
+        }
+        *out_slot = kcap_count - 1;
+        *out_addr = idx;
+        return 0;
+    }
+    case CAP_KIND_TIMER: {
+        if (timer_count >= MAX_TIMERS) {
+            return -1;
+        }
+        if (!untyped_alloc(PAGE_SIZE_4K)) {
+            return -1;
+        }
+        uint32_t idx = timer_count++;
+        timer_table[idx].in_use = 1;
+        timer_table[idx].armed = 0;
+        timer_table[idx].deadline_tick = 0;
+        timer_table[idx].notif_idx = -1;
+        timer_table[idx].signal_bits = 0;
+        timer_table[idx].period_ticks = 0;
+        if (kcap_grant(caller, CAP_KIND_TIMER, idx, 0) != 0) {
+            return -1;
+        }
+        *out_slot = kcap_count - 1;
+        *out_addr = idx;
+        return 0;
+    }
+    default:
+        return -1;
+    }
+}
+void kcap_invalidate_tcb_death(tid_t tid) {
+    for (uint32_t i = 0; i < kcap_count; i++) {
+        if (kcap_table[i].kind == CAP_KIND_TCB && kcap_table[i].addr == tid) {
+            kcap_table[i].kind = CAP_KIND_INVALID;
+        }
+    }
+}
+int cap_destroy(tid_t caller, uint32_t slot) {
+    const kcap_t *cap = validate(caller, slot, CAP_KIND_TCB);
+    if (!cap) {
+        return -1;
+    }
+    return sched_terminate((tid_t)cap->addr);
+}
+int cap_notif_signal(tid_t caller, uint32_t notif_slot, uint64_t bits) {
+    const kcap_t *cap = validate(caller, notif_slot, CAP_KIND_NOTIFICATION);
+    if (!cap) {
+        return -1;
+    }
+    notif_deliver((int)cap->addr, bits);
+    return 0;
+}
+int cap_notif_wait_begin(tid_t caller, uint32_t notif_slot, uint64_t *out_bits) {
+    const kcap_t *cap = validate(caller, notif_slot, CAP_KIND_NOTIFICATION);
+    if (!cap) {
+        return -1;
+    }
+    notification_t *n = &notif_table[cap->addr];
+    if (n->word != 0) {
+        *out_bits = n->word;
+        n->word = 0;
+        return 1;
+    }
+    n->waiter = caller;
+    return 0;
+}
+int cap_notif_poll(tid_t caller, uint32_t notif_slot, uint64_t *out_bits) {
+    const kcap_t *cap = validate(caller, notif_slot, CAP_KIND_NOTIFICATION);
+    if (!cap) {
+        return -1;
+    }
+    notification_t *n = &notif_table[cap->addr];
+    if (n->word == 0) {
+        return -2;
+    }
+    *out_bits = n->word;
+    n->word = 0;
+    return 0;
+}
+int cap_timer_arm(tid_t caller, uint32_t timer_slot, uint32_t notif_slot,
+                  uint64_t ticks_from_now, uint64_t bits, uint64_t period_ticks) {
+    const kcap_t *timer_cap = validate(caller, timer_slot, CAP_KIND_TIMER);
+    if (!timer_cap) {
+        return -1;
+    }
+    const kcap_t *notif_cap = validate(caller, notif_slot, CAP_KIND_NOTIFICATION);
+    if (!notif_cap) {
+        return -1;
+    }
+    if (ticks_from_now < 1) {
+        ticks_from_now = 1;
+    }
+    uint64_t deadline = sched_now() + ticks_from_now;
+    timer_obj_t *t = &timer_table[timer_cap->addr];
+    t->armed = 1;
+    t->deadline_tick = deadline;
+    t->notif_idx = (int)notif_cap->addr;
+    t->signal_bits = bits;
+    t->period_ticks = period_ticks;
+    sched_note_deadline(deadline);
+    return 0;
+}
+int cap_timer_disarm(tid_t caller, uint32_t timer_slot) {
+    const kcap_t *cap = validate(caller, timer_slot, CAP_KIND_TIMER);
+    if (!cap) {
+        return -1;
+    }
+    timer_table[cap->addr].armed = 0;
+    return 0;
+}
+void cap_timer_rescan(uint64_t now_ticks, uint64_t *out_next) {
+    uint64_t next = (uint64_t)-1;
+    for (uint32_t i = 0; i < timer_count; i++) {
+        timer_obj_t *t = &timer_table[i];
+        if (!t->in_use || !t->armed) {
+            continue;
+        }
+        if (t->deadline_tick <= now_ticks) {
+            notif_deliver(t->notif_idx, t->signal_bits);
+            if (t->period_ticks != 0) {
+                while (t->deadline_tick <= now_ticks) {
+                    t->deadline_tick += t->period_ticks;
+                }
+            } else {
+                t->armed = 0;
+                continue;
+            }
+        }
+        if (t->deadline_tick < next) {
+            next = t->deadline_tick;
+        }
+    }
+    *out_next = next;
+}
+void notif_invalidate_waiter_death(tid_t tid) {
+    for (uint32_t i = 0; i < notif_count; i++) {
+        if (notif_table[i].waiter == tid) {
+            notif_table[i].waiter = 0;
+        }
+    }
+}
+int cap_revoke_frame(tid_t caller, uint32_t frame_slot) {
+    const kcap_t *cap = validate(caller, frame_slot, CAP_KIND_FRAME);
+    if (!cap || cap->mapped_va == 0) {
+        return -1;
+    }
+    tcb_t *caller_tcb = sched_get_tcb(caller);
+    if (!caller_tcb) {
+        return -1;
+    }
+    arch_vm_unmap_page(caller_tcb->address_space, cap->mapped_va);
+    arch_tlb_shootdown(caller_tcb->address_space, cap->mapped_va);
+    kcap_table[frame_slot].kind = CAP_KIND_INVALID;
+    return 0;
+}

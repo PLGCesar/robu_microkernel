@@ -1,0 +1,65 @@
+diff a/src/core/ipc.c b/src/core/ipc.c	(rejected hunks)
+@@ -325,6 +326,63 @@ void sys_ipc(void) {
+             f->rax = (uint64_t)rc;
+             return;
+         }
++        if (flags & IPC_FLAG_THREAD_INFO) {
++            thread_state_t state;
++            uint8_t prio;
++            int32_t exit_status;
++            tid_t parent_tid;
++            const char *name;
++            if (sched_thread_info((tid_t)f->r8, &state, &prio, &exit_status,
++                                  &parent_tid, &name) != 0) {
++                f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
++                return;
++            }
++            /* Same "only read the second 8 bytes if the first 8 were
++               genuinely full" discipline as apps/libc/src/exit.c's own
++               w2/w3 packing -- reading name[8+j] unconditionally would
++               walk past a short name's own NUL into whatever memory
++               happens to follow it (found the hard way there, see
++               that file's own comment; not repeating that bug here). */
++            uint64_t w13 = 0, w14 = 0;
++            int ni = 0;
++            for (; ni < 8 && name[ni]; ni++) {
++                w13 |= ((uint64_t)(uint8_t)name[ni]) << (8 * ni);
++            }
++            if (ni == 8) {
++                for (int nj = 0; nj < 8 && name[8 + nj]; nj++) {
++                    w14 |= ((uint64_t)(uint8_t)name[8 + nj]) << (8 * nj);
++                }
++            }
++            f->rax = (uint64_t)IPC_ERR_NONE;
++            f->r8 = (uint64_t)state;
++            f->r9 = (uint64_t)prio;
++            f->r10 = (uint64_t)(int64_t)exit_status;
++            f->r12 = (uint64_t)parent_tid;
++            f->r13 = w13;
++            f->r14 = w14;
++            return;
++        }
++        if (flags & IPC_FLAG_SYS_INFO) {
++            uint64_t category = f->r8;
++            if (category == 0) {
++                f->rax = (uint64_t)IPC_ERR_NONE;
++                f->r8 = pmm_stats.total_frames;
++                f->r9 = pmm_stats.free_frames;
++                f->r10 = pmm_stats.alloc_calls;
++                f->r12 = pmm_stats.free_calls;
++            } else if (category == 1) {
++                f->rax = (uint64_t)IPC_ERR_NONE;
++                f->r8 = sched_stats.full_scheds;
++                f->r9 = sched_stats.preempts;
++                f->r10 = sched_stats.ipc_msgs;
++                f->r12 = sched_stats.ticks;
++                f->r13 = sched_stats.timer_traps;
++                f->r14 = sched_stats.kicks_sent;
++            } else {
++                f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
++            }
++            return;
++        }
+         f->rax = (uint64_t)IPC_ERR_NONE;
+         if (src_filter == 0) {
+             sched_yield();

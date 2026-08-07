@@ -1,0 +1,36 @@
+diff a/include/robu/ipc.h b/include/robu/ipc.h	(rejected hunks)
+@@ -189,6 +189,34 @@
+    rax=NONE / NOT_FOUND (stale handle). */
+ #define IPC_FLAG_PIPE_CLOSE (1 << 21)
+ 
++/* /proc /var/tmp /var/sys completion: dest==0, no RECV only. r8=tid to
++   query. Out: r8=thread_state_t, r9=prio, r10=exit_status (sign-
++   extended, only meaningful once ZOMBIE/DEAD), r12=parent_tid,
++   r13/r14=name packed 8 bytes each (TEST_REPORT_KIND_EXIT's own
++   convention, main.c) -- up to 16 bytes, truncated beyond that (same
++   compromise real Linux's own TASK_COMM_LEN makes). rax=NONE/NOT_FOUND
++   (tid 0, out of range, or DEAD -- a freed, reusable slot has nothing
++   real left to report). Deliberately NOT sched_get_tcb() underneath:
++   that call excludes ZOMBIE too (not a valid IPC destination), but a
++   zombie is exactly the state apps/procfs/procfs.c's own /proc/<tid>/
++   status needs to still show (a child its parent hasn't reaped yet is
++   real, matching real /proc's own zombie visibility) -- see
++   sched_thread_info()'s own comment (sched.h). Ungated, same trust
++   model as SPAWN/PIPE_*: pure read-only introspection, nothing to
++   protect. */
++#define IPC_FLAG_THREAD_INFO (1 << 22)
++
++/* /var/sys completion: dest==0, no RECV only. r8=category (0=pmm_stats,
++   1=sched_stats -- apps/sysfs/sysfs.c's own "meminfo"/"schedstats"
++   files). Out (category 0): r8=total_frames, r9=free_frames,
++   r10=alloc_calls, r12=free_calls. Out (category 1): r8=full_scheds,
++   r9=preempts, r10=ipc_msgs, r12=ticks, r13=timer_traps,
++   r14=kicks_sent. rax=NONE/NOT_FOUND (unknown category). Ungated, same
++   trust model as THREAD_INFO above -- both stats structs are already
++   plain kernel globals (pmm_stats/sched_stats) with nothing capability-
++   gated about reading them; this just gives userspace a way to. */
++#define IPC_FLAG_SYS_INFO (1 << 23)
++
+ /* IPC Error Codes (returned in rax) */
+ #define IPC_ERR_NONE       0
+ #define IPC_ERR_NOT_FOUND -1
