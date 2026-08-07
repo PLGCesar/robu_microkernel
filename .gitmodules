@@ -1,0 +1,6 @@
+[submodule "apps/mlibc"]
+	path = apps/mlibc
+	url = https://github.com/managarm/mlibc
+[submodule "apps/minibox"]
+	path = apps/minibox
+	url = https://github.com/Qwer-TeX/minibox
