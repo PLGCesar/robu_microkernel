@@ -5,6 +5,7 @@
 #include <errno.h>
 #include "robu/types.h"
 #include "robu/uipc.h"
+#include "robu/kinfo.h"
 int rmdir(const char *path) { (void)path; errno = ENOSYS; return -1; }
 int execve(const char *path, char *const argv[], char *const envp[]) {
     (void)path; (void)argv; (void)envp;
@@ -106,6 +107,8 @@ int pause(void) {
 }
 unsigned int alarm(unsigned int seconds) { (void)seconds; return 0; }
 long sysconf(int name) {
-    (void)name;
+    if (name == _SC_NPROCESSORS_ONLN || name == _SC_NPROCESSORS_CONF) {
+        return (long)kinfo_user()->cpu_count;
+    }
     return _SC_ARG_MAX;
 }

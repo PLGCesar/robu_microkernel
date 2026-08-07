@@ -181,6 +181,16 @@ size_t strftime(char *s, size_t max, const char *format, const struct tm *tm) {
     }
     return (size_t)(d - s);
 }
+static char asctime_buf[26];
+char *asctime(const struct tm *tm) {
+    size_t n = strftime(asctime_buf, sizeof(asctime_buf) - 1, "%a %b %e %T %Y", tm);
+    asctime_buf[n] = '\n';
+    asctime_buf[n + 1] = '\0';
+    return asctime_buf;
+}
+char *ctime(const time_t *timep) {
+    return asctime(localtime(timep));
+}
 static int parse_int(const char **s, int maxdigits, int *out) {
     int n = 0, val = 0;
     while (n < maxdigits && isdigit((unsigned char)**s)) {

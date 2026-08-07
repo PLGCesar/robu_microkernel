@@ -57,6 +57,8 @@ ssize_t readlink(const char *path, char *buf, size_t bufsiz);
 ssize_t readlinkat(int dirfd, const char *path, char *buf, size_t bufsiz);
 unsigned int sleep(unsigned int seconds);
 int fsync(int fd);
+void sync(void);
+char *ttyname(int fd);
 int ftruncate(int fd, off_t length);
 int truncate(const char *path, off_t length);
 int chown(const char *path, uid_t owner, gid_t group);
@@ -72,4 +74,6 @@ int pause(void);
 unsigned int alarm(unsigned int seconds);
 long sysconf(int name);
 #define _SC_ARG_MAX 131072
+#define _SC_NPROCESSORS_ONLN 84
+#define _SC_NPROCESSORS_CONF 83
 #endif

@@ -21,4 +21,8 @@ typedef long clock_t;
 typedef unsigned long uintptr_t;
 typedef long intptr_t;
 typedef long ptrdiff_t;
+
+#define major(dev) ((unsigned int)(((dev) >> 8) & 0xfff))
+#define minor(dev) ((unsigned int)((dev) & 0xff))
+#define makedev(maj, min) ((dev_t)((((unsigned long)(maj) & 0xfff) << 8) | ((unsigned long)(min) & 0xff)))
 #endif

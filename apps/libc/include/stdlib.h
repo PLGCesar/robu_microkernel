@@ -37,4 +37,9 @@ int system(const char *command);
 char *realpath(const char *path, char *resolved_path);
 char *mkdtemp(char *template_str);
 int mkstemp(char *template_str);
+
+extern char *optarg;
+extern int optind, opterr, optopt;
+int getopt(int argc, char *const argv[], const char *optstring);
+
 #endif
