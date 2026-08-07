@@ -63,7 +63,7 @@ APP_LDFLAGS := -nostdlib -static -z noexecstack
 
 $(APPS_BUILD_DIR)/devfs/devfs.c.o: apps/devfs/devfs.c
 	@mkdir -p $(@D)
-	$(CC) $(CFLAG) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(APPS_BUILD_DIR)/devfs/devfs: $(APPS_BUILD_DIR)/devfs/devfs.c.o $(APP_COMMON_OBJ) apps/link/devfs.ld
 	$(LD) $(APP_LDFLAGS) -T apps/link/devfs.ld -e _start -o $@ \
@@ -105,7 +105,29 @@ $(APPS_BUILD_DIR)/libc/setjmp.S.o: apps/libc/src/setjmp.S
 	@mkdir -p $(@D)
 	$(CC) $(LIBC_SHIM_CFLAGS) -c $< -o $@
 
+$(APPS_BUILD_DIR)/hello_initsys/main.c.o: apps/hello_initsys/main.c
+	@mkdir -p $(@D)
+	$(CC) $(LIBC_SHIM_CFLAGS) -c $< -o $@
 
+$(APPS_BUILD_DIR)/hello_initsys/hello_initsys: $(APPS_BUILD_DIR)/hello_initsys/main.c.o $(LIBC_SHIM_OBJS) apps/link/hello_initsys.ld
+	$(LD) $(APP_LDFLAGS) -T apps/link/hello_initsys.ld -e _start -o $@ \
+	    $(APPS_BUILD_DIR)/hello_initsys/main.c.o $(LIBC_SHIM_OBJS)
+
+MINIBOX_SRCS := $(filter-out apps/minibox/src/init.c,$(wildcard apps/minibox/src/*.c)) \
+                $(wildcard apps/minibox/libmb/*.c) apps/minibox/robu-stubs.c
+MINIBOX_OBJS := $(patsubst apps/minibox/%.c,$(APPS_BUILD_DIR)/minibox/%.c.o,$(MINIBOX_SRCS))
+MINIBOX_CFLAGS := $(LIBC_SHIM_CFLAGS) -Iapps/minibox/include -Iapps/minibox/libmb \
+                   -Wno-unused-function -Wno-unused-parameter -Wno-unused-variable -Wno-unused-result \
+                   -DVERSION=\"0.3.1\" -include apps/minibox/include/config.h
+
+$(MINIBOX_OBJS): $(APPS_BUILD_DIR)/minibox/%.c.o: apps/minibox/%.c
+	@mkdir -p $(@D)
+	$(CC) $(MINIBOX_CFLAGS) -c $< -o $@
+
+$(APPS_BUILD_DIR)/minibox/minibox: $(MINIBOX_OBJS) $(LIBC_SHIM_OBJS) apps/link/minibox.ld
+	$(LD) $(APP_LDFLAGS) -T apps/link/minibox.ld -e _start -o $@ \
+	    $(MINIBOX_OBJS) $(LIBC_SHIM_OBJS)
 
 APP_BINS := $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
+            $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(APPS_BUILD_DIR)/minibox/minibox \
 
