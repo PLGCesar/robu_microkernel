@@ -15,9 +15,6 @@
 static uint8_t rootfs_buf[ROOTFS_MAX_SIZE];
 static uint64_t rootfs_len;
 
-const uint8_t *service_elf_start, *service_elf_end;
-const uint8_t *task_elf_start, *task_elf_end;
-
 int rootfs_lookup(const char *name, const uint8_t **out_start, const uint8_t **out_end) {
     const uint8_t *start;
     uint64_t sz;
@@ -27,18 +24,6 @@ int rootfs_lookup(const char *name, const uint8_t **out_start, const uint8_t **o
     *out_start = start;
     *out_end = start + sz;
     return 0;
-}
-
-static const char *rootfs_split_pair(char *buf, const char **second) {
-    for (char *p = buf; *p; p++) {
-        if (*p == ',') {
-            *p = '\0';
-            *second = p + 1;
-            return buf;
-        }
-    }
-    *second = "";
-    return buf;
 }
 
 void rootfs_init(void) {
@@ -57,30 +42,6 @@ void rootfs_init(void) {
     memcpy(rootfs_buf, (const void *)mod_base, mod_len);
     rootfs_len = mod_len;
     kprintf("[boot] rootfs: %lu bytes copied from module at 0x%lx\n", mod_len, (uint64_t)mod_base);
-
-    static char apps_buf[128];
-    const char *apps = cmdline_get("apps");
-    if (!apps) {
-        apps = "hello_service,hello_task";
-    }
-    size_t len = strlen(apps);
-    if (len >= sizeof(apps_buf)) {
-        len = sizeof(apps_buf) - 1;
-    }
-    memcpy(apps_buf, apps, len);
-    apps_buf[len] = '\0';
-    const char *task_name;
-    const char *service_name = rootfs_split_pair(apps_buf, &task_name);
-
-    if (rootfs_lookup(service_name, &service_elf_start, &service_elf_end) != 0) {
-        kprintf("[boot] FATAL: rootfs has no entry named '%s'\n", service_name);
-        for (;;) { asm volatile("cli; hlt"); }
-    }
-    if (rootfs_lookup(task_name, &task_elf_start, &task_elf_end) != 0) {
-        kprintf("[boot] FATAL: rootfs has no entry named '%s'\n", task_name);
-        for (;;) { asm volatile("cli; hlt"); }
-    }
-    kprintf("[boot] loaded service='%s' task='%s'\n", service_name, task_name);
 }
 
 void root_task_init(paddr_t untyped_base, uint64_t untyped_size) {
