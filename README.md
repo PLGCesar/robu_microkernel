@@ -70,31 +70,6 @@ The standard objection is real: pushing services into user space converts functi
 
 The kernel exposes a small, deliberately boring set of primitives around threads, address spaces, and IPC. **POSIX is not a kernel interface here** — POSIX-like semantics are provided by a user-space personality server built on those primitives. Applications get a familiar API; the kernel stays small enough to reason about.
 
-### Clone the repository
-
-```bash
-$ git clone https://github.com/bayar17/robu_microkernel.git
-```
-
-### Build and run
-```bash
-$ cd robu_microkernel
-```
-
-```bash
-$ make (to build the kernel )
-```
-
-```bash
-$ make run (to run the kernel in QEMU)
-```
-
-```bash
-$ make run-serial (to run the kernel in QEMU with -serial stdio)
-```
-
-Notes: This command run may not be accurate due to constant change to [Makefile](Makefile)
-
 ## License
  
 MIT. See [LICENSE](LICENSE).

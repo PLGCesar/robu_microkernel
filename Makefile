@@ -40,7 +40,7 @@ ASM_SRCS := $(wildcard $(ARCH_DIR)/src/*.S)
 
 OBJS := $(C_SRCS:%.c=$(BUILD_DIR)/%.c.o) $(ASM_SRCS:%.S=$(BUILD_DIR)/%.S.o)
 
-.PHONY: all clean run run-serial shell test
+.PHONY: all clean
 
 all: $(BUILD_DIR)/$(TARGET)
 
@@ -106,9 +106,6 @@ $(APPS_BUILD_DIR)/libc/setjmp.S.o: apps/libc/src/setjmp.S
 	$(CC) $(LIBC_SHIM_CFLAGS) -c $< -o $@
 
 
-$(APPS_BUILD_DIR)/ramfstest/ramfstest: $(APPS_BUILD_DIR)/ramfstest/ramfstest.c.o $(LIBC_SHIM_OBJS) $(APP_COMMON_OBJ) apps/link/ramfstest.ld
-	$(LD) $(APP_LDFLAGS) --gc-sections -T apps/link/ramfstest.ld -e _start -o $@ \
-	    $(APPS_BUILD_DIR)/ramfstest/ramfstest.c.o $(LIBC_SHIM_OBJS) $(APP_COMMON_OBJ)
 
-APP_BINS := $(APPS_BUILD_DIR)/toybox_true/true $(APPS_BUILD_DIR)/toybox_false/false \
-            $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
+APP_BINS := $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
+
