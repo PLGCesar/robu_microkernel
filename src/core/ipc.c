@@ -7,6 +7,8 @@
 #include "robu/spawn.h"
 #include "robu/pipe.h"
 #include "robu/pmm.h"
+#include "robu/kinfo.h"
+#include "robu/arch.h"
 static tid_t console_writer_tid = 0;
 void ipc_grant_console_writer(tid_t tid) {
     console_writer_tid = tid;
@@ -285,6 +287,30 @@ void sys_ipc(void) {
                 // the process we just became.
                 f->rax = (uint64_t)rc;
             }
+            return;
+        }
+        if (flags & IPC_FLAG_MOUNT) {
+            // Only kernel-boot-spawned servers may register a mount --
+            // gated on parent_tid==0, which alloc_tcb() zero-initializes
+            // and only spawn_create()/spawn_fork_create() ever set nonzero
+            // (src/core/spawn.c). Every server started from
+            // src/boot/servers.c via elf_load_and_spawn() directly
+            // structurally, unforgeably satisfies this; nothing spawned by
+            // a userspace process (via IPC_FLAG_SPAWN/FORK) ever can.
+            if (cur->parent_tid != 0) {
+                f->rax = (uint64_t)IPC_ERR_NO_CAP;
+                return;
+            }
+            uint64_t len = f->r8;
+            if (len >= MOUNT_PREFIX_MAX) {
+                len = MOUNT_PREFIX_MAX - 1;
+            }
+            uint64_t words[5] = { f->r9, f->r10, f->r12, f->r13, f->r14 };
+            char prefix[MOUNT_PREFIX_MAX];
+            memcpy(prefix, words, len);
+            prefix[len] = '\0';
+            int rc = kinfo_mount_add(prefix, (uint32_t)cur->tid);
+            f->rax = (uint64_t)(rc == 0 ? IPC_ERR_NONE : IPC_ERR_NO_MEM);
             return;
         }
         if (flags & IPC_FLAG_SET_FSBASE) {
