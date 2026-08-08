@@ -40,7 +40,7 @@ ASM_SRCS := $(wildcard $(ARCH_DIR)/src/*.S)
 
 OBJS := $(C_SRCS:%.c=$(BUILD_DIR)/%.c.o) $(ASM_SRCS:%.S=$(BUILD_DIR)/%.S.o)
 
-.PHONY: all clean mlibc minibox run
+.PHONY: all clean mlibc minibox run mlibc-hello
 
 all: $(BUILD_DIR)/$(TARGET)
 
@@ -191,6 +191,21 @@ mlibc:
 	fi
 	ninja -C $(MLIBC_BUILD_DIR)
 	DESTDIR=$(MLIBC_SYSROOT) ninja -C $(MLIBC_BUILD_DIR) install
+
+MLIBC_APP_CFLAGS := --target=x86_64-linux-gnu -ffreestanding -fPIC -fno-stack-protector \
+                     -mno-red-zone -D_GNU_SOURCE -Wall -Wextra \
+                     -isystem $(MLIBC_SYSROOT)/usr/include
+
+$(APPS_BUILD_DIR)/mlibc-hello/hello.c.o: apps/mlibc-hello/hello.c mlibc
+	@mkdir -p $(@D)
+	$(CC) $(MLIBC_APP_CFLAGS) -c $< -o $@
+
+$(APPS_BUILD_DIR)/mlibc-hello/hello: $(APPS_BUILD_DIR)/mlibc-hello/hello.c.o apps/link/mlibchello.ld
+	ld.lld -nostdlib -static -T apps/link/mlibchello.ld -e _start -o $@ \
+	    $(MLIBC_SYSROOT)/usr/lib/crt1.o $(APPS_BUILD_DIR)/mlibc-hello/hello.c.o \
+	    --start-group $(MLIBC_SYSROOT)/usr/lib/libc.a $(MLIBC_SYSROOT)/usr/lib/libm.a --end-group
+
+mlibc-hello: $(APPS_BUILD_DIR)/mlibc-hello/hello
 
 $(APPS_BUILD_DIR)/stub/stub.c.o: apps/stub/stub.c
 	@mkdir -p $(@D)
