@@ -25,6 +25,7 @@ tid_t devfs_init(void) {
     }
     ipc_grant_console_writer(devfs->tid);
     kinfo_set_devfs_tid(devfs->tid);
+    kinfo_mount_add("/dev/", devfs->tid);
     kprintf("[boot] devfs server: tid=%u, granted console-write permission\n", devfs->tid);
     return devfs->tid;
 }
