@@ -271,6 +271,12 @@ void sys_ipc(void) {
             f->r8 = child_tid;
             return;
         }
+        if (flags & IPC_FLAG_SET_FSBASE) {
+            cur->fs_base = f->r8;
+            arch_set_fsbase(cur->fs_base);
+            f->rax = (uint64_t)IPC_ERR_NONE;
+            return;
+        }
         if (flags & IPC_FLAG_THREAD_INFO) {
             thread_state_t state;
             uint8_t prio;

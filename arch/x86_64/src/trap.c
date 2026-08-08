@@ -22,7 +22,13 @@ void arch_uctx_init_user(arch_uctx_t *u, vaddr_t entry, vaddr_t user_stack_top) 
     u->rip = entry;
     u->cs = GDT_SEL_UCODE_RPL3;
     u->ss = GDT_SEL_UDATA_RPL3;
-    u->rsp = (user_stack_top & ~0xFULL) - 8;
+    // _start is entered via iretq, not a call -- there's no implicit return
+    // address on the stack, so the SysV ABI requires rsp to be exactly
+    // 16-byte aligned here (not the usual "aligned - 8" a function sees when
+    // entered via call). Getting this wrong is invisible until something
+    // executes an alignment-strict SSE stack access (e.g. movaps) that trusts
+    // the ABI guarantee, which is exactly what mlibc's vfprintf does.
+    u->rsp = user_stack_top & ~0xFULL;
     u->rflags = 0x202;
 }
 void arch_uctx_init_user_argv(arch_uctx_t *u, vaddr_t entry, vaddr_t user_stack_top,

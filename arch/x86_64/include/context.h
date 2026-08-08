@@ -25,4 +25,5 @@ void arch_fpu_save(void *dst);
 void arch_fpu_restore(const void *src);
 void arch_fpu_boot_init(void);
 void arch_fpu_default_state(void *dst);
+void arch_set_fsbase(uint64_t base);
 #endif

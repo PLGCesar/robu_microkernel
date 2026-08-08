@@ -10,7 +10,10 @@
 #include "robu/rootfs.h"
 #include "../boot.h"
 
-#define ROOTFS_MAX_SIZE (1536 * 1024)
+// mlibc-linked binaries are ~100x bigger than the old apps/libc ones (each
+// statically links libc.a/libm.a in full, no dynamic linking), so migrating
+// the rootfs to them needs a much bigger buffer than apps/libc ever did.
+#define ROOTFS_MAX_SIZE (24 * 1024 * 1024)
 
 static uint8_t rootfs_buf[ROOTFS_MAX_SIZE];
 static uint64_t rootfs_len;

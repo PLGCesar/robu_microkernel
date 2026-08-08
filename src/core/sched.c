@@ -265,6 +265,9 @@ void sched_resume(void) {
     if (next != prev) {
         arch_fpu_save(prev->fpu_state);
         arch_fpu_restore(next->fpu_state);
+        if (next->fs_base != prev->fs_base) {
+            arch_set_fsbase(next->fs_base);
+        }
     }
     arch_vm_activate(next->address_space);
     sched_lock_release();
@@ -529,6 +532,7 @@ void sched_start(void) {
     sched_stats.full_scheds = 0;
     tcb_t *next = current_thread;
     arch_fpu_restore(next->fpu_state);
+    arch_set_fsbase(next->fs_base);
     sched_arm_next_deadline();
     arch_vm_activate(next->address_space);
     sched_lock_release();
@@ -539,6 +543,7 @@ void sched_join_ap(void) {
     schedule();
     tcb_t *next = current_thread;
     arch_fpu_restore(next->fpu_state);
+    arch_set_fsbase(next->fs_base);
     sched_arm_next_deadline();
     arch_vm_activate(next->address_space);
     sched_lock_release();

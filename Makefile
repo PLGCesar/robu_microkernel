@@ -10,10 +10,14 @@ ifeq ($(BUILD_SYS),clang)
   CC := clang
   AS := clang -x assembler-with-cpp
   LD := ld.lld
+  # llvm-strip (unlike clang/ld.lld) isn't symlinked onto PATH by the
+  # Homebrew LLVM keg; macOS's own /usr/bin/strip is Mach-O only, not ELF.
+  STRIP := $(shell command -v llvm-strip 2>/dev/null || echo /opt/homebrew/opt/llvm/bin/llvm-strip)
 else ifeq ($(BUILD_SYS),gcc)
   CC := $(ARCH)-elf-gcc
   AS := $(ARCH)-elf-as
   LD := $(ARCH)-elf-ld
+  STRIP := $(ARCH)-elf-strip
 else
   $(error Unknown BUILD_SYS '$(BUILD_SYS)' -- expected 'clang' or 'gcc')
 endif
@@ -94,30 +98,29 @@ $(APPS_BUILD_DIR)/sysfs/sysfs: $(APPS_BUILD_DIR)/sysfs/sysfs.c.o $(APP_COMMON_OB
 	$(LD) $(APP_LDFLAGS) -T apps/link/sysfs.ld -e _start -o $@ \
 	    $(APPS_BUILD_DIR)/sysfs/sysfs.c.o $(APP_COMMON_OBJ)
 
-LIBC_SHIM_OBJS := $(patsubst apps/libc/src/%.c,$(APPS_BUILD_DIR)/libc/%.c.o,$(wildcard apps/libc/src/*.c)) \
-                  $(APPS_BUILD_DIR)/libc/setjmp.S.o
-LIBC_SHIM_CFLAGS := --target=$(ARCH)-elf -ffreestanding -O2 -fno-pic -fno-pie -fno-stack-protector \
-                     -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -ffunction-sections -fdata-sections \
-                     -Wall -Wextra -Iinclude -I$(ARCH_DIR)/include -Iapps/libc/include
+MLIBC_DIR := apps/mlibc
+MLIBC_BUILD_DIR := $(BUILD_DIR)/mlibc
+MLIBC_SYSROOT := $(abspath $(BUILD_DIR)/mlibc-sysroot)
+MLIBC_CROSS := apps/mlibc-robu-cross.ini
 
-$(APPS_BUILD_DIR)/libc/%.c.o: apps/libc/src/%.c
-	@mkdir -p $(@D)
-	$(CC) $(LIBC_SHIM_CFLAGS) -c $< -o $@
+mlibc:
+	@if [ ! -f $(MLIBC_BUILD_DIR)/build.ninja ]; then \
+	    meson setup $(MLIBC_BUILD_DIR) $(MLIBC_DIR) --cross-file $(MLIBC_CROSS) \
+	        -Dlibgcc_dependency=false -Ddefault_library=static --prefix=/usr; \
+	fi
+	ninja -C $(MLIBC_BUILD_DIR)
+	DESTDIR=$(MLIBC_SYSROOT) ninja -C $(MLIBC_BUILD_DIR) install
 
-$(APPS_BUILD_DIR)/libc/setjmp.S.o: apps/libc/src/setjmp.S
-	@mkdir -p $(@D)
-	$(CC) $(LIBC_SHIM_CFLAGS) -c $< -o $@
+MLIBC_APP_CFLAGS := --target=x86_64-linux-gnu -ffreestanding -fPIC -fno-stack-protector \
+                     -mno-red-zone -D_GNU_SOURCE -Wall -Wextra \
+                     -isystem $(MLIBC_SYSROOT)/usr/include
+
+MLIBC_CRT_OBJS := $(MLIBC_SYSROOT)/usr/lib/crt1.o
+MLIBC_LIBS := --start-group $(MLIBC_SYSROOT)/usr/lib/libc.a $(MLIBC_SYSROOT)/usr/lib/libm.a --end-group
 
 CONFUSE_DIR := apps/confuse/src
 CONFUSE_BUILD_DIR := $(APPS_BUILD_DIR)/confuse
-# This kernel's scheduler never saves/restores FPU/SSE state across context
-# switches or traps (see arch/x86_64/src/trap.S), so no code anywhere in
-# userspace may touch the x87/SSE units -- including via the "double" ABI,
-# which on x86_64 SysV requires XMM0/XMM1 regardless of whether the code
-# actually does floating-point math. CONFUSE_NO_FLOAT (a small local patch
-# to confuse.c) compiles out CFGT_FLOAT support so the library never emits
-# any double-typed parameter, return, or local.
-CONFUSE_CFLAGS := $(LIBC_SHIM_CFLAGS) -I$(CONFUSE_DIR) \
+CONFUSE_CFLAGS := $(MLIBC_APP_CFLAGS) -I$(CONFUSE_DIR) \
                    -DHAVE_UNISTD_H -DHAVE_SYS_STAT_H -DHAVE_STRING_H \
                    -DHAVE_STRDUP -DHAVE_STRNDUP -DHAVE_STRCASECMP -DHAVE_FMEMOPEN \
                    -DPACKAGE=\"libconfuse\" -DPACKAGE_VERSION=\"3.3\" -DPACKAGE_STRING=\"libconfuse-3.3\" \
@@ -142,59 +145,46 @@ $(CONFUSE_BUILD_DIR)/reallocarray.c.o: $(CONFUSE_DIR)/reallocarray.c
 
 CONFUSE_OBJS := $(CONFUSE_BUILD_DIR)/confuse.c.o $(CONFUSE_BUILD_DIR)/lexer.c.o $(CONFUSE_BUILD_DIR)/reallocarray.c.o
 
-$(APPS_BUILD_DIR)/hello_initsys/main.c.o: apps/hello_initsys/main.c
+$(APPS_BUILD_DIR)/hello_initsys/main.c.o: apps/hello_initsys/main.c mlibc
 	@mkdir -p $(@D)
-	$(CC) $(LIBC_SHIM_CFLAGS) -I$(CONFUSE_DIR) -c $< -o $@
+	$(CC) $(MLIBC_APP_CFLAGS) -I$(CONFUSE_DIR) -c $< -o $@
 
-$(APPS_BUILD_DIR)/hello_initsys/hello_initsys: $(APPS_BUILD_DIR)/hello_initsys/main.c.o $(CONFUSE_OBJS) $(LIBC_SHIM_OBJS) apps/link/hello_initsys.ld
-	$(LD) $(APP_LDFLAGS) -T apps/link/hello_initsys.ld -e _start -o $@ \
-	    $(APPS_BUILD_DIR)/hello_initsys/main.c.o $(CONFUSE_OBJS) $(LIBC_SHIM_OBJS)
+$(APPS_BUILD_DIR)/hello_initsys/hello_initsys: $(APPS_BUILD_DIR)/hello_initsys/main.c.o $(CONFUSE_OBJS) apps/link/hello_initsys.ld
+	ld.lld -nostdlib -static -T apps/link/hello_initsys.ld -e _start -o $@ \
+	    $(MLIBC_CRT_OBJS) $(APPS_BUILD_DIR)/hello_initsys/main.c.o $(CONFUSE_OBJS) $(MLIBC_LIBS)
+	$(STRIP) --strip-all $@
 
 MINIBOX_SRCS := $(filter-out apps/minibox/src/init.c,$(wildcard apps/minibox/src/*.c)) \
                 $(wildcard apps/minibox/libmb/*.c) apps/minibox/robu-stubs.c
 MINIBOX_OBJS := $(patsubst apps/minibox/%.c,$(APPS_BUILD_DIR)/minibox/%.c.o,$(MINIBOX_SRCS))
-MINIBOX_CFLAGS := $(LIBC_SHIM_CFLAGS) -Iapps/minibox/include -Iapps/minibox/libmb \
+MINIBOX_CFLAGS := $(MLIBC_APP_CFLAGS) -Iapps/minibox/include -Iapps/minibox/libmb \
+                   -Iinclude -I$(ARCH_DIR)/include \
                    -Wno-unused-function -Wno-unused-parameter -Wno-unused-variable -Wno-unused-result \
                    -DVERSION=\"0.3.1\" -include apps/minibox/include/config.h
 
-$(MINIBOX_OBJS): $(APPS_BUILD_DIR)/minibox/%.c.o: apps/minibox/%.c
+$(MINIBOX_OBJS): $(APPS_BUILD_DIR)/minibox/%.c.o: apps/minibox/%.c mlibc
 	@mkdir -p $(@D)
 	$(CC) $(MINIBOX_CFLAGS) -c $< -o $@
 
-$(APPS_BUILD_DIR)/minibox/minibox: $(MINIBOX_OBJS) $(LIBC_SHIM_OBJS) apps/link/minibox.ld
-	$(LD) $(APP_LDFLAGS) -T apps/link/minibox.ld -e _start -o $@ \
-	    $(MINIBOX_OBJS) $(LIBC_SHIM_OBJS)
+$(APPS_BUILD_DIR)/minibox/minibox: $(MINIBOX_OBJS) apps/link/minibox.ld
+	ld.lld -nostdlib -static -T apps/link/minibox.ld -e _start -o $@ \
+	    $(MLIBC_CRT_OBJS) $(MINIBOX_OBJS) $(MLIBC_LIBS)
+	$(STRIP) --strip-all $@
 
 minibox: $(APPS_BUILD_DIR)/minibox/minibox
 
-SH_CFLAGS := $(LIBC_SHIM_CFLAGS) -Wno-unused-parameter -Wno-sign-compare
+SH_CFLAGS := $(MLIBC_APP_CFLAGS) -Wno-unused-parameter -Wno-sign-compare
 
-$(APPS_BUILD_DIR)/sh/minibox-shell.c.o: apps/minibox/minibox-shell/minibox-shell.c
+$(APPS_BUILD_DIR)/sh/minibox-shell.c.o: apps/minibox/minibox-shell/minibox-shell.c mlibc
 	@mkdir -p $(@D)
 	$(CC) $(SH_CFLAGS) -c $< -o $@
 
-$(APPS_BUILD_DIR)/sh/sh: $(APPS_BUILD_DIR)/sh/minibox-shell.c.o $(LIBC_SHIM_OBJS) apps/link/sh.ld
-	$(LD) $(APP_LDFLAGS) -T apps/link/sh.ld -e _start -o $@ \
-	    $(APPS_BUILD_DIR)/sh/minibox-shell.c.o $(LIBC_SHIM_OBJS)
+$(APPS_BUILD_DIR)/sh/sh: $(APPS_BUILD_DIR)/sh/minibox-shell.c.o apps/link/sh.ld
+	ld.lld -nostdlib -static -T apps/link/sh.ld -e _start -o $@ \
+	    $(MLIBC_CRT_OBJS) $(APPS_BUILD_DIR)/sh/minibox-shell.c.o $(MLIBC_LIBS)
+	$(STRIP) --strip-all $@
 
 sh: $(APPS_BUILD_DIR)/sh/sh
-
-MLIBC_DIR := apps/mlibc
-MLIBC_BUILD_DIR := $(BUILD_DIR)/mlibc
-MLIBC_SYSROOT := $(abspath $(BUILD_DIR)/mlibc-sysroot)
-MLIBC_CROSS := apps/mlibc-robu-cross.ini
-
-mlibc:
-	@if [ ! -f $(MLIBC_BUILD_DIR)/build.ninja ]; then \
-	    meson setup $(MLIBC_BUILD_DIR) $(MLIBC_DIR) --cross-file $(MLIBC_CROSS) \
-	        -Dlibgcc_dependency=false -Ddefault_library=static --prefix=/usr; \
-	fi
-	ninja -C $(MLIBC_BUILD_DIR)
-	DESTDIR=$(MLIBC_SYSROOT) ninja -C $(MLIBC_BUILD_DIR) install
-
-MLIBC_APP_CFLAGS := --target=x86_64-linux-gnu -ffreestanding -fPIC -fno-stack-protector \
-                     -mno-red-zone -D_GNU_SOURCE -Wall -Wextra \
-                     -isystem $(MLIBC_SYSROOT)/usr/include
 
 $(APPS_BUILD_DIR)/mlibc-hello/hello.c.o: apps/mlibc-hello/hello.c mlibc
 	@mkdir -p $(@D)
@@ -202,8 +192,8 @@ $(APPS_BUILD_DIR)/mlibc-hello/hello.c.o: apps/mlibc-hello/hello.c mlibc
 
 $(APPS_BUILD_DIR)/mlibc-hello/hello: $(APPS_BUILD_DIR)/mlibc-hello/hello.c.o apps/link/mlibchello.ld
 	ld.lld -nostdlib -static -T apps/link/mlibchello.ld -e _start -o $@ \
-	    $(MLIBC_SYSROOT)/usr/lib/crt1.o $(APPS_BUILD_DIR)/mlibc-hello/hello.c.o \
-	    --start-group $(MLIBC_SYSROOT)/usr/lib/libc.a $(MLIBC_SYSROOT)/usr/lib/libm.a --end-group
+	    $(MLIBC_CRT_OBJS) $(APPS_BUILD_DIR)/mlibc-hello/hello.c.o $(MLIBC_LIBS)
+	$(STRIP) --strip-all $@
 
 mlibc-hello: $(APPS_BUILD_DIR)/mlibc-hello/hello
 
