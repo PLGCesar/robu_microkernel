@@ -28,3 +28,11 @@ void arch_fpu_boot_init(void) {
 void arch_fpu_default_state(void *dst) {
     memcpy(dst, fpu_default_state, sizeof(fpu_default_state));
 }
+
+#define MSR_FS_BASE 0xC0000100u
+
+void arch_set_fsbase(uint64_t base) {
+    uint32_t lo = (uint32_t)base;
+    uint32_t hi = (uint32_t)(base >> 32);
+    asm volatile("wrmsr" : : "c"(MSR_FS_BASE), "a"(lo), "d"(hi) : "memory");
+}

@@ -3,7 +3,10 @@
 #include "robu/ramfs.h"
 #define RAMFS_MAX_FILES 24
 #define RAMFS_MAX_HANDLES 32
-#define RAMFS_MAX_DATA (144 * 1024)
+// mlibc-linked binaries statically link the whole of libc.a/libm.a, so they
+// land well over the old 144 KiB apps/libc-era cap -- 747 KiB for the
+// smallest one seen so far (sh).
+#define RAMFS_MAX_DATA (2 * 1024 * 1024)
 typedef struct {
     int in_use;
     int is_dir;

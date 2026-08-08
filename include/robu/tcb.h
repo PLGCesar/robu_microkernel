@@ -29,6 +29,7 @@ typedef struct tcb {
     int32_t exit_status;
     arch_uctx_t uctx;
     uint8_t fpu_state[512] __attribute__((aligned(16)));
+    uint64_t fs_base;
     paddr_t address_space;
     void *kstack_top;
     uint64_t kstack_size;
