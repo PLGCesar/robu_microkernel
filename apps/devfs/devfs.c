@@ -1,8 +1,14 @@
 #include "robu/types.h"
 #include "robu/uipc.h"
-#include "robu/devfs.h"
-static int path_eq(const char *a, const char *b) {
-    for (int i = 0; i < DEVFS_PATH_MAX; i++) {
+#include "robu/vfs.h"
+typedef enum {
+    DEV_CONSOLE = 0,
+    DEV_NULL = 1,
+    DEV_ZERO = 2,
+    DEV_RANDOM = 3,
+} dev_id_t;
+static int name_eq(const char *a, const char *b) {
+    for (int i = 0; i < VFS_PATH_MAX; i++) {
         if (a[i] != b[i]) {
             return 0;
         }
@@ -12,15 +18,48 @@ static int path_eq(const char *a, const char *b) {
     }
     return 1;
 }
-static int resolve_path(const char *path, dev_id_t *out) {
-    if (path_eq(path, "/dev/console")) { *out = DEV_CONSOLE; return 0; }
-    if (path_eq(path, "/dev/null"))    { *out = DEV_NULL;    return 0; }
-    if (path_eq(path, "/dev/zero"))    { *out = DEV_ZERO;    return 0; }
-    if (path_eq(path, "/dev/random"))  { *out = DEV_RANDOM;  return 0; }
+static int resolve_name(const char *name, dev_id_t *out) {
+    if (name_eq(name, "console")) { *out = DEV_CONSOLE; return 0; }
+    if (name_eq(name, "null"))    { *out = DEV_NULL;    return 0; }
+    if (name_eq(name, "zero"))    { *out = DEV_ZERO;    return 0; }
+    if (name_eq(name, "random"))  { *out = DEV_RANDOM;  return 0; }
     return -1;
 }
 static int valid_handle(uint64_t h) {
     return h == DEV_CONSOLE || h == DEV_NULL || h == DEV_ZERO || h == DEV_RANDOM;
+}
+static int devfs_kernel_console_write(const uint8_t *buf, uint64_t len) {
+    msg_regs_t m;
+    uint64_t clamped = len > 40 ? 40 : len;
+    m.word[0] = clamped;
+    uint64_t words[5] = {0, 0, 0, 0, 0};
+    uint8_t *bytes = (uint8_t *)words;
+    for (uint64_t i = 0; i < clamped; i++) {
+        bytes[i] = buf[i];
+    }
+    m.word[1] = words[0];
+    m.word[2] = words[1];
+    m.word[3] = words[2];
+    m.word[4] = words[3];
+    m.word[5] = words[4];
+    return (int)robu_ipc_raw(0, 0, IPC_FLAG_CONSOLE_WRITE, &m, NULL);
+}
+static int devfs_kernel_console_read(uint8_t *buf, uint64_t max) {
+    msg_regs_t m = (msg_regs_t){0};
+    int64_t rc = robu_ipc_raw(0, 0, IPC_FLAG_CONSOLE_READ, &m, NULL);
+    if (rc != IPC_ERR_NONE) {
+        return -1;
+    }
+    uint64_t n = m.word[0];
+    if (n > max) {
+        n = max;
+    }
+    uint64_t words[5] = { m.word[1], m.word[2], m.word[3], m.word[4], m.word[5] };
+    const uint8_t *bytes = (const uint8_t *)words;
+    for (uint64_t i = 0; i < n; i++) {
+        buf[i] = bytes[i];
+    }
+    return (int)n;
 }
 #define CONSOLE_LOCAL_BUF_SIZE 64
 static uint8_t console_local_buf[CONSOLE_LOCAL_BUF_SIZE];
@@ -44,27 +83,27 @@ static int rdrand64(uint64_t *out) {
     return 0;
 }
 static void handle_open(msg_regs_t *m) {
-    char path[DEVFS_PATH_MAX];
-    const devfs_open_req_t *req = (const devfs_open_req_t *)m;
-    for (int i = 0; i < DEVFS_PATH_MAX; i++) {
-        path[i] = req->path[i];
+    char name[VFS_PATH_MAX];
+    const vfs_open_req_t *req = (const vfs_open_req_t *)m;
+    for (int i = 0; i < VFS_PATH_MAX; i++) {
+        name[i] = req->name[i];
     }
     dev_id_t id;
-    devfs_open_reply_t *reply = (devfs_open_reply_t *)m;
-    if (resolve_path(path, &id) != 0) {
-        reply->status = DEVFS_ERR_NOT_FOUND;
+    vfs_open_reply_t *reply = (vfs_open_reply_t *)m;
+    if (resolve_name(name, &id) != 0) {
+        reply->status = VFS_ERR_NOT_FOUND;
         return;
     }
     reply->status = 0;
     reply->handle = (uint64_t)id;
 }
 static void handle_read(msg_regs_t *m) {
-    const devfs_read_req_t *req = (const devfs_read_req_t *)m;
+    const vfs_read_req_t *req = (const vfs_read_req_t *)m;
     uint64_t handle = req->handle;
-    uint64_t len = req->len > DEVFS_READ_MAX ? DEVFS_READ_MAX : req->len;
-    devfs_read_reply_t *reply = (devfs_read_reply_t *)m;
+    uint64_t len = req->len > VFS_READ_MAX ? VFS_READ_MAX : req->len;
+    vfs_read_reply_t *reply = (vfs_read_reply_t *)m;
     if (!valid_handle(handle)) {
-        reply->status = DEVFS_ERR_BAD_HANDLE;
+        reply->status = VFS_ERR_BAD_HANDLE;
         return;
     }
     switch ((dev_id_t)handle) {
@@ -79,7 +118,7 @@ static void handle_read(msg_regs_t *m) {
         break;
     case DEV_RANDOM: {
         if (!rdrand_available) {
-            reply->status = DEVFS_ERR_NOT_SUPPORTED;
+            reply->status = VFS_ERR_NOT_SUPPORTED;
             break;
         }
         uint64_t got = 0;
@@ -98,10 +137,10 @@ static void handle_read(msg_regs_t *m) {
     }
     case DEV_CONSOLE: {
         if (console_local_head == console_local_tail) {
-            uint8_t kbuf[DEVFS_READ_MAX];
+            uint8_t kbuf[VFS_READ_MAX];
             int got = devfs_kernel_console_read(kbuf, sizeof(kbuf));
             if (got < 0) {
-                reply->status = DEVFS_ERR_NOT_SUPPORTED;
+                reply->status = VFS_ERR_NOT_SUPPORTED;
                 break;
             }
             for (int i = 0; i < got; i++) {
@@ -122,21 +161,21 @@ static void handle_read(msg_regs_t *m) {
         break;
     }
     default:
-        reply->status = DEVFS_ERR_NOT_SUPPORTED;
+        reply->status = VFS_ERR_NOT_SUPPORTED;
         break;
     }
 }
 static void handle_write(msg_regs_t *m) {
-    const devfs_write_req_t *req = (const devfs_write_req_t *)m;
+    const vfs_write_req_t *req = (const vfs_write_req_t *)m;
     uint64_t handle = req->handle;
-    uint64_t len = req->len > DEVFS_WRITE_MAX ? DEVFS_WRITE_MAX : req->len;
-    uint8_t data[DEVFS_WRITE_MAX];
+    uint64_t len = req->len > VFS_WRITE_MAX ? VFS_WRITE_MAX : req->len;
+    uint8_t data[VFS_WRITE_MAX];
     for (uint64_t i = 0; i < len; i++) {
         data[i] = req->data[i];
     }
-    devfs_write_reply_t *reply = (devfs_write_reply_t *)m;
+    vfs_write_reply_t *reply = (vfs_write_reply_t *)m;
     if (!valid_handle(handle)) {
-        reply->status = DEVFS_ERR_BAD_HANDLE;
+        reply->status = VFS_ERR_BAD_HANDLE;
         return;
     }
     switch ((dev_id_t)handle) {
@@ -152,10 +191,40 @@ static void handle_write(msg_regs_t *m) {
     }
 }
 static void handle_close(msg_regs_t *m) {
-    const devfs_close_req_t *req = (const devfs_close_req_t *)m;
+    const vfs_close_req_t *req = (const vfs_close_req_t *)m;
     uint64_t handle = req->handle;
-    devfs_close_reply_t *reply = (devfs_close_reply_t *)m;
-    reply->status = valid_handle(handle) ? 0 : DEVFS_ERR_BAD_HANDLE;
+    vfs_close_reply_t *reply = (vfs_close_reply_t *)m;
+    reply->status = valid_handle(handle) ? 0 : VFS_ERR_BAD_HANDLE;
+}
+static void handle_stat(msg_regs_t *m) {
+    char name[VFS_PATH_MAX];
+    const vfs_stat_req_t *req = (const vfs_stat_req_t *)m;
+    for (int i = 0; i < VFS_PATH_MAX; i++) {
+        name[i] = req->name[i];
+    }
+    dev_id_t id;
+    vfs_stat_reply_t *reply = (vfs_stat_reply_t *)m;
+    if (resolve_name(name, &id) != 0) {
+        reply->status = VFS_ERR_NOT_FOUND;
+        return;
+    }
+    reply->status = 0;
+    reply->size = 0;
+    reply->is_dir = 0;
+    reply->ino = (uint64_t)id + 1;
+}
+static void handle_fstat(msg_regs_t *m) {
+    const vfs_fstat_req_t *req = (const vfs_fstat_req_t *)m;
+    uint64_t handle = req->handle;
+    vfs_stat_reply_t *reply = (vfs_stat_reply_t *)m;
+    if (!valid_handle(handle)) {
+        reply->status = VFS_ERR_BAD_HANDLE;
+        return;
+    }
+    reply->status = 0;
+    reply->size = 0;
+    reply->is_dir = 0;
+    reply->ino = handle + 1;
 }
 void _start(void) {
     check_rdrand();
@@ -164,20 +233,31 @@ void _start(void) {
     for (;;) {
         ipc_recv(IPC_TID_ANY, &m, &from);
         switch (m.word[0]) {
-        case DEVFS_OP_OPEN:
+        case VFS_OP_OPEN:
             handle_open(&m);
             break;
-        case DEVFS_OP_READ:
+        case VFS_OP_READ:
             handle_read(&m);
             break;
-        case DEVFS_OP_WRITE:
+        case VFS_OP_WRITE:
             handle_write(&m);
             break;
-        case DEVFS_OP_CLOSE:
+        case VFS_OP_CLOSE:
             handle_close(&m);
             break;
+        case VFS_OP_STAT:
+            handle_stat(&m);
+            break;
+        case VFS_OP_FSTAT:
+            handle_fstat(&m);
+            break;
+        case VFS_OP_READDIR:
+        case VFS_OP_RENAME:
+        case VFS_OP_UNLINK:
+            m.word[0] = (uint64_t)(int64_t)VFS_ERR_NOT_SUPPORTED;
+            break;
         default:
-            ((devfs_open_reply_t *)&m)->status = DEVFS_ERR_NOT_FOUND;
+            m.word[0] = (uint64_t)(int64_t)VFS_ERR_NOT_FOUND;
             break;
         }
         ipc_send(from, &m);

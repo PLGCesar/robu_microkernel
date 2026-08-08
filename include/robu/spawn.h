@@ -22,6 +22,8 @@ typedef struct {
     uint32_t fd;
     uint32_t kind;
     uint64_t handle;
+    uint32_t server_tid; /* FD_VFS/FD_VFS_DIR only (sysdeps.cpp); opaque to
+                             the kernel like `handle`, just copied through. */
 } robu_spawn_fd_t;
 #define SPAWN_FD_KIND_PIPE_READ  100
 #define SPAWN_FD_KIND_PIPE_WRITE 101
