@@ -150,6 +150,62 @@ int spawn_create(tcb_t *caller, vaddr_t req_va, uint64_t req_len, tid_t *out_tid
     *out_tid = child->tid;
     return IPC_ERR_NONE;
 }
+// Same wire format and validation shape as spawn_create() (deliberately --
+// one request format for both "create a new process" and "become a new
+// process"), but drives elf_exec_current() instead of
+// elf_load_and_spawn_req(): the caller's own tid, parent_tid, and fd table
+// (which lives in the caller's own process memory and is untouched by an
+// address-space swap) all survive: real execve() semantics. There's no
+// nfds/fds handling here -- POSIX exec() inherits every open fd unless it
+// was marked close-on-exec, and nothing in this codebase marks any fd
+// close-on-exec yet, so "inherit everything" is already the correct
+// behavior with zero extra work.
+int spawn_exec(tcb_t *caller, vaddr_t req_va, uint64_t req_len) {
+    if (caller->address_space == 0) {
+        return IPC_ERR_NO_CAP;
+    }
+    if (req_len == 0 || req_len > SPAWN_REQ_MAX_LEN) {
+        return IPC_ERR_NO_CAP;
+    }
+    if (vm_copy_from_user(caller->address_space, req_va, spawn_scratch, req_len) != 0) {
+        return IPC_ERR_NO_CAP;
+    }
+    if (req_len < sizeof(robu_spawn_req_t)) {
+        return IPC_ERR_NO_CAP;
+    }
+    const robu_spawn_req_t *req = (const robu_spawn_req_t *)spawn_scratch;
+    if (req->magic != SPAWN_REQ_MAGIC || req->total_len < sizeof(*req) ||
+        req->total_len > req_len) {
+        return IPC_ERR_NO_CAP;
+    }
+    uint32_t total_len = req->total_len;
+    if (req->argc > SPAWN_MAX_ARGS || req->envc > SPAWN_MAX_ARGS) {
+        return IPC_ERR_NO_CAP;
+    }
+    char name[SPAWN_NAME_MAX];
+    if (copy_name(req, total_len, name, sizeof(name)) != 0) {
+        return IPC_ERR_NO_CAP;
+    }
+    uint32_t strbuf_used = 0;
+    if (copy_str_array(req->argv_off, req->argc, total_len, spawn_argv,
+                       spawn_strbuf, sizeof(spawn_strbuf), &strbuf_used) != 0) {
+        return IPC_ERR_NO_CAP;
+    }
+    if (copy_str_array(req->envp_off, req->envc, total_len, spawn_envp,
+                       spawn_strbuf, sizeof(spawn_strbuf), &strbuf_used) != 0) {
+        return IPC_ERR_NO_CAP;
+    }
+    const uint8_t *elf_start, *elf_end;
+    if (rootfs_lookup(name, &elf_start, &elf_end) != 0) {
+        return IPC_ERR_NOT_FOUND;
+    }
+    if (elf_exec_current(caller, name, elf_start, elf_end,
+                         (int)req->argc, (const char *const *)spawn_argv,
+                         (int)req->envc, (const char *const *)spawn_envp) != 0) {
+        return IPC_ERR_NO_MEM;
+    }
+    return IPC_ERR_NONE;
+}
 int spawn_fork_create(tcb_t *caller, tid_t *out_tid) {
     if (caller->address_space == 0) {
         return IPC_ERR_NO_CAP;
@@ -159,7 +215,7 @@ int spawn_fork_create(tcb_t *caller, tid_t *out_tid) {
         return IPC_ERR_NO_MEM;
     }
     tcb_t *child = thread_create_forked_locked(caller->name, child_as, caller->pager_tid,
-                                               caller->prio, &caller->uctx);
+                                               caller->prio, caller);
     if (!child) {
         vm_address_space_destroy(child_as);
         return IPC_ERR_NO_MEM;

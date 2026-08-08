@@ -449,12 +449,18 @@ tcb_t *thread_create_user_argv_locked(const char *name, vaddr_t entry, vaddr_t u
     return t;
 }
 tcb_t *thread_create_forked_locked(const char *name, paddr_t address_space, tid_t pager_tid,
-                                   uint8_t prio, const arch_uctx_t *parent_uctx) {
+                                   uint8_t prio, const tcb_t *parent) {
     tcb_t *t = alloc_tcb(name, prio);
     if (t) {
         t->address_space = address_space;
         t->pager_tid = pager_tid;
-        t->uctx = *parent_uctx;
+        t->uctx = parent->uctx;
+        // fs_base/fpu_state are separate tcb_t fields, not part of uctx --
+        // copy them too, or the child inherits a default/reset FPU image
+        // and (far more seriously) fs_base=0, breaking every %fs-relative
+        // TLS access (including mlibc's own errno) the instant it runs.
+        t->fs_base = parent->fs_base;
+        memcpy(t->fpu_state, parent->fpu_state, sizeof(t->fpu_state));
         sched_ready_now(t);
     }
     return t;

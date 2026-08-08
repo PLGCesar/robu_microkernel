@@ -271,6 +271,22 @@ void sys_ipc(void) {
             f->r8 = child_tid;
             return;
         }
+        if (flags & IPC_FLAG_SELF_TID) {
+            f->rax = (uint64_t)IPC_ERR_NONE;
+            f->r8 = (uint64_t)cur->tid;
+            return;
+        }
+        if (flags & IPC_FLAG_EXEC) {
+            int rc = spawn_exec(cur, f->r8, f->r9);
+            if (rc != IPC_ERR_NONE) {
+                // Only touch f on failure -- on success, elf_exec_current()
+                // already completely replaced *f (== cur->uctx) with the
+                // new image's entry state; writing to it here would corrupt
+                // the process we just became.
+                f->rax = (uint64_t)rc;
+            }
+            return;
+        }
         if (flags & IPC_FLAG_SET_FSBASE) {
             cur->fs_base = f->r8;
             arch_set_fsbase(cur->fs_base);
