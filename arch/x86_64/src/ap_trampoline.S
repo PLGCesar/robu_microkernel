@@ -40,8 +40,8 @@ ap32_start:
     mov %ax, %ss
 
     mov %cr4, %eax
-    or $(1 << 5), %eax
-    mov %eax, %cr4           /* PAE */
+    or $((1 << 5) | (1 << 9) | (1 << 10)), %eax
+    mov %eax, %cr4           /* PAE | OSFXSR | OSXMMEXCPT */
 
     .extern boot_pml4
     mov $boot_pml4, %eax     /* same tables the BSP already fully built */
@@ -53,7 +53,8 @@ ap32_start:
     wrmsr                    /* EFER.LME | EFER.NXE */
 
     mov %cr0, %eax
-    or $0x80000000, %eax
+    and $~(1 << 2), %eax     /* EM=0: SSE/x87 execute instead of trapping */
+    or $(0x80000000 | (1 << 1)), %eax  /* PG=1, MP=1 */
     mov %eax, %cr0           /* paging on */
 
     .extern kernel_gdt_ptr

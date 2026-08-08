@@ -80,14 +80,15 @@ start:
     movl %eax, %cr3
 
     movl %cr4, %eax
-    orl $(1 << 5), %eax
+    orl $((1 << 5) | (1 << 9) | (1 << 10)), %eax  /* PAE | OSFXSR | OSXMMEXCPT */
     movl %eax, %cr4
     movl $0xC0000080, %ecx
     rdmsr
     orl $((1 << 8) | (1 << 11)), %eax
     wrmsr
     movl %cr0, %eax
-    orl $0x80000000, %eax
+    andl $~(1 << 2), %eax    /* EM=0: SSE/x87 execute instead of trapping */
+    orl $(0x80000000 | (1 << 1)), %eax  /* PG=1, MP=1 */
     movl %eax, %cr0
 
     lgdt gdt64_ptr

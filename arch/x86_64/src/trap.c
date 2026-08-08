@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include "robu/types.h"
 #include "robu/arch.h"
 #include "robu/kprintf.h"
@@ -81,7 +82,10 @@ void trap_dispatch(arch_uctx_t *frame) {
     if (frame->vector == TRAP_VEC_IPI_SHOOTDOWN) {
         arch_tlb_shootdown_handle_local();
         lapic_eoi();
-        arch_enter_thread(&current_thread->uctx);
+        /* Resuming the same thread that trapped in -- kernel code never
+         * touches SSE/x87, so the FPU register file is exactly as this
+         * thread left it. No save/restore needed. */
+        arch_enter_thread_raw(&current_thread->uctx);
     }
     sched_lock_acquire();
     switch (frame->vector) {

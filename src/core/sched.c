@@ -250,14 +250,25 @@ static void schedule(void) {
     TRACE(TRACE_EVT_CTX_SWITCH, prev->tid, next->tid, 0 , 0, 0, 0);
 }
 void sched_resume(void) {
+    tcb_t *prev = current_thread;
     if (need_resched[this_cpu()->cpu_id] || current_thread->state != THREAD_STATE_RUNNING) {
         schedule();
         sched_arm_next_deadline();
     }
     tcb_t *next = current_thread;
+    /* Kernel code never touches SSE/x87, so the FPU register file only
+     * ever needs to move when we're actually switching to a different
+     * thread -- and that switch must be atomic with respect to the rest
+     * of the scheduler's view of `prev`/`next`, so do it before releasing
+     * sched_lock rather than after (a cross-core race window there was
+     * the root cause of an earlier, hard-to-reproduce corruption bug). */
+    if (next != prev) {
+        arch_fpu_save(prev->fpu_state);
+        arch_fpu_restore(next->fpu_state);
+    }
     arch_vm_activate(next->address_space);
     sched_lock_release();
-    arch_enter_thread(&next->uctx);
+    arch_enter_thread_raw(&next->uctx);
 }
 static void sched_tick_local(uint64_t n) {
     tcb_t *cur = current_thread;
@@ -372,6 +383,7 @@ static tcb_t *alloc_tcb(const char *name, uint8_t prio) {
         t->prio = prio;
         t->timeslice_left = SCHED_TIMESLICE_TICKS;
         t->last_cpu = (uint32_t)-1;
+        arch_fpu_default_state(t->fpu_state);
         return t;
     }
     return NULL;
@@ -516,17 +528,19 @@ void sched_start(void) {
     schedule();
     sched_stats.full_scheds = 0;
     tcb_t *next = current_thread;
+    arch_fpu_restore(next->fpu_state);
     sched_arm_next_deadline();
     arch_vm_activate(next->address_space);
     sched_lock_release();
-    arch_enter_thread(&next->uctx);
+    arch_enter_thread_raw(&next->uctx);
 }
 void sched_join_ap(void) {
     sched_lock_acquire();
     schedule();
     tcb_t *next = current_thread;
+    arch_fpu_restore(next->fpu_state);
     sched_arm_next_deadline();
     arch_vm_activate(next->address_space);
     sched_lock_release();
-    arch_enter_thread(&next->uctx);
+    arch_enter_thread_raw(&next->uctx);
 }
