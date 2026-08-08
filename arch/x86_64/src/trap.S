@@ -49,9 +49,9 @@ trap_common:
     call trap_dispatch
     ud2
 
-.global arch_enter_thread
-.type arch_enter_thread, @function
-arch_enter_thread:
+.global arch_enter_thread_raw
+.type arch_enter_thread_raw, @function
+arch_enter_thread_raw:
     mov %rdi, %rsp
     pop %r15
     pop %r14

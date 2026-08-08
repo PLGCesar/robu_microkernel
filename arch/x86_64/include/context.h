@@ -14,11 +14,15 @@ typedef struct arch_uctx {
 #define TRAP_VEC_IPI_KICK   0x31
 #define TRAP_VEC_IPI_PANIC  0x32
 #define TRAP_VEC_IPI_SHOOTDOWN 0x33
-void arch_enter_thread(arch_uctx_t *uctx) __attribute__((noreturn));
+void arch_enter_thread_raw(arch_uctx_t *uctx) __attribute__((noreturn));
 void arch_uctx_init(arch_uctx_t *uctx, void (*entry)(void), void *stack_top);
 void arch_uctx_init_user(arch_uctx_t *uctx, vaddr_t entry, vaddr_t user_stack_top);
 void arch_uctx_init_user_argv(arch_uctx_t *uctx, vaddr_t entry, vaddr_t user_stack_top,
                               uint64_t argc, uint64_t argv, uint64_t envp, uint64_t heap_base,
                               uint64_t spawn_info);
 void trap_dispatch(arch_uctx_t *frame) __attribute__((noreturn));
+void arch_fpu_save(void *dst);
+void arch_fpu_restore(const void *src);
+void arch_fpu_boot_init(void);
+void arch_fpu_default_state(void *dst);
 #endif

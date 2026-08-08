@@ -48,9 +48,9 @@ static void pager_entry(void) {
         arch_vm_map_page(ft->address_space, page_va, frame,
                          VM_PROT_READ | VM_PROT_WRITE | VM_PROT_USER);
         pager_faults_resolved++;
-        SAFE_PRINT("[pager] tid=%u '%s' faulted at 0x%lx -> frame 0x%lx "
+        SAFE_PRINT("[pager] tid=%u '%s' faulted at 0x%lx rip=0x%lx -> frame 0x%lx "
                    "(color %d), mapped and resumed (#%lu)\n",
-                   faulter, ft->name, fault_addr, frame, color, pager_faults_resolved);
+                   faulter, ft->name, fault_addr, ft->uctx.rip, frame, color, pager_faults_resolved);
         ipc_send(faulter, NULL);
     }
 }
@@ -74,6 +74,7 @@ static void monitor_entry(void) {
 
 void kmain(void) {
     arch_console_init();
+    arch_fpu_boot_init();
     kputs("");
     kputs("Robu Kernel 0.9 x86_64 booting...");
     uint32_t boot_magic;
