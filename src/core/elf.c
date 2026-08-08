@@ -297,3 +297,62 @@ tcb_t *elf_load_and_spawn_req(const char *name, const uint8_t *elf_start,
     }
     return child;
 }
+// Real execve(): replace the calling thread's own image in place, keeping
+// its tid (and everything keyed off that tid -- parent/child wait
+// relationships, fd table contents in its own process memory, held
+// capabilities). This is the one operation in the whole ABI that needs a
+// privileged, address-space-mutating kernel primitive rather than something
+// buildable from spawn+wait in userspace -- see
+// docs/libc-and-abi-reference.md's §4.3/§6.6 for why.
+//
+// Approach: build the new image in a *fresh* address space exactly the way
+// a normal spawn does (reusing map_segments_and_stack/build_string_array_page
+// verbatim), then swap it into the caller's own tcb_t and reset the caller's
+// own saved register frame to the new entry point, and only then destroy the
+// old address space. This sidesteps ever having to unmap-in-place (no risk
+// of stale mappings from a differently-shaped old image) at the cost of a
+// transient doubling of physical memory use for the few instructions between
+// "new image built" and "old one destroyed."
+int elf_exec_current(tcb_t *cur, const char *name, const uint8_t *elf_start,
+                     const uint8_t *elf_end, int argc, const char *const *argv,
+                     int envc, const char *const *envp) {
+    const elf_image_t *img = elf_parse(elf_start, elf_end);
+    if (!img) {
+        return -1;
+    }
+    paddr_t new_as = vm_address_space_create();
+    if (!new_as) {
+        kprintf("[elf] out of memory creating an address space to exec '%s'\n", name);
+        return -1;
+    }
+    vaddr_t stack_top = map_segments_and_stack(new_as, img, elf_start, name);
+    if (!stack_top) {
+        vm_address_space_destroy(new_as);
+        return -1;
+    }
+    vaddr_t argv_base = stack_top + PAGE_SIZE_4K;
+    vaddr_t envp_base = argv_base + PAGE_SIZE_4K;
+    vaddr_t heap_base = envp_base + PAGE_SIZE_4K;
+    vaddr_t argv_uva, envp_uva;
+    if (build_string_array_page(new_as, argv_base, argc, argv, name, "argv", &argv_uva) != 0) {
+        vm_address_space_destroy(new_as);
+        return -1;
+    }
+    if (build_string_array_page(new_as, envp_base, envc, envp, name, "envp", &envp_uva) != 0) {
+        vm_address_space_destroy(new_as);
+        return -1;
+    }
+    paddr_t old_as = cur->address_space;
+    cur->address_space = new_as;
+    // Resets the caller's ENTIRE saved frame (cs/ss/rflags/rip/rsp/argc/
+    // argv/envp/heap_base/spawn_info=0) -- exactly the state a freshly
+    // spawned process would have, matching real execve()'s "everything is
+    // gone except the process identity" contract.
+    arch_uctx_init_user_argv(&cur->uctx, img->entry, stack_top, (uint64_t)argc, argv_uva,
+                             envp_uva, heap_base, 0);
+    // This is a same-thread operation, not a scheduler switch, so nothing
+    // else will reload CR3 on our behalf before we return to userspace.
+    arch_vm_activate(new_as);
+    vm_address_space_destroy(old_as);
+    return 0;
+}

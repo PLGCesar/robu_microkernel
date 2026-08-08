@@ -34,7 +34,7 @@ tcb_t *thread_create_user_argv_locked(const char *name, vaddr_t entry, vaddr_t u
                                       uint64_t argc, uint64_t argv, uint64_t envp,
                                       uint64_t heap_base, uint64_t spawn_info);
 tcb_t *thread_create_forked_locked(const char *name, paddr_t address_space, tid_t pager_tid,
-                                   uint8_t prio, const arch_uctx_t *parent_uctx);
+                                   uint8_t prio, const tcb_t *parent);
 tcb_t *sched_get_tcb(tid_t tid);
 uint64_t sched_now(void);
 int sched_thread_info(tid_t tid, thread_state_t *state_out, uint8_t *prio_out,

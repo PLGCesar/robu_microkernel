@@ -34,4 +34,5 @@ typedef struct {
 int spawn_create(tcb_t *caller, vaddr_t req_va, uint64_t req_len, tid_t *out_tid);
 int spawn_wait_begin(tcb_t *caller, tid_t filter, tid_t *out_tid, int *out_status);
 int spawn_fork_create(tcb_t *caller, tid_t *out_tid);
+int spawn_exec(tcb_t *caller, vaddr_t req_va, uint64_t req_len);
 #endif

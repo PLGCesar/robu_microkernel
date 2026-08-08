@@ -73,4 +73,7 @@ tcb_t *elf_load_and_spawn_req(const char *name, const uint8_t *elf_start,
                               int argc, const char *const *argv,
                               int envc, const char *const *envp,
                               uint32_t nfds, const void *fds_blob);
+int elf_exec_current(tcb_t *cur, const char *name, const uint8_t *elf_start,
+                     const uint8_t *elf_end, int argc, const char *const *argv,
+                     int envc, const char *const *envp);
 #endif
