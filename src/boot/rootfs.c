@@ -110,3 +110,34 @@ void ramfs_bin_seed_init(void) {
     kprintf("[boot] /bin seed: %lu real binaries copied into ramfs\n",
             (uint64_t)(sizeof(names) / sizeof(names[0])));
 }
+
+void ramfs_etc_seed_init(void) {
+    const uint8_t *start, *end;
+    if (rootfs_lookup("rc.conf", &start, &end) != 0) {
+        kprintf("[boot] /etc seed: no 'rc.conf' entry in rootfs, skipping\n");
+        return;
+    }
+    uint64_t sz = (uint64_t)(end - start);
+
+    int64_t h = ramfs_open("etc/rc.conf", RAMFS_O_CREAT | RAMFS_O_TRUNC);
+    if (h < 0) {
+        kprintf("[boot] /etc seed: ramfs_open('etc/rc.conf') failed rc=%ld\n", h);
+        return;
+    }
+    uint64_t off = 0;
+    while (off < sz) {
+        uint64_t chunk = sz - off;
+        if (chunk > RAMFS_WRITE_MAX) {
+            chunk = RAMFS_WRITE_MAX;
+        }
+        int64_t n = ramfs_write((uint64_t)h, start + off, chunk);
+        if (n <= 0) {
+            kprintf("[boot] /etc seed: ramfs_write('etc/rc.conf') failed at off=%lu\n", off);
+            ramfs_close((uint64_t)h);
+            return;
+        }
+        off += (uint64_t)n;
+    }
+    ramfs_close((uint64_t)h);
+    kprintf("[boot] /etc seed: rc.conf (%lu bytes) copied into ramfs\n", sz);
+}

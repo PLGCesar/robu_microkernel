@@ -108,13 +108,47 @@ $(APPS_BUILD_DIR)/libc/setjmp.S.o: apps/libc/src/setjmp.S
 	@mkdir -p $(@D)
 	$(CC) $(LIBC_SHIM_CFLAGS) -c $< -o $@
 
+CONFUSE_DIR := apps/confuse/src
+CONFUSE_BUILD_DIR := $(APPS_BUILD_DIR)/confuse
+# This kernel's scheduler never saves/restores FPU/SSE state across context
+# switches or traps (see arch/x86_64/src/trap.S), so no code anywhere in
+# userspace may touch the x87/SSE units -- including via the "double" ABI,
+# which on x86_64 SysV requires XMM0/XMM1 regardless of whether the code
+# actually does floating-point math. CONFUSE_NO_FLOAT (a small local patch
+# to confuse.c) compiles out CFGT_FLOAT support so the library never emits
+# any double-typed parameter, return, or local.
+CONFUSE_CFLAGS := $(LIBC_SHIM_CFLAGS) -I$(CONFUSE_DIR) \
+                   -DHAVE_UNISTD_H -DHAVE_SYS_STAT_H -DHAVE_STRING_H \
+                   -DHAVE_STRDUP -DHAVE_STRNDUP -DHAVE_STRCASECMP -DHAVE_FMEMOPEN \
+                   -DPACKAGE=\"libconfuse\" -DPACKAGE_VERSION=\"3.3\" -DPACKAGE_STRING=\"libconfuse-3.3\" \
+                   -DCONFUSE_NO_FLOAT \
+                   -Wno-unused-parameter -Wno-unused-function -Wno-unused-variable -Wno-sign-compare
+
+$(CONFUSE_BUILD_DIR)/lexer.c: $(CONFUSE_DIR)/lexer.l
+	@mkdir -p $(@D)
+	flex -Pcfg_yy -o $@ $<
+
+$(CONFUSE_BUILD_DIR)/lexer.c.o: $(CONFUSE_BUILD_DIR)/lexer.c
+	@mkdir -p $(@D)
+	$(CC) $(CONFUSE_CFLAGS) -Wno-unused-but-set-variable -c $< -o $@
+
+$(CONFUSE_BUILD_DIR)/confuse.c.o: $(CONFUSE_DIR)/confuse.c
+	@mkdir -p $(@D)
+	$(CC) $(CONFUSE_CFLAGS) -c $< -o $@
+
+$(CONFUSE_BUILD_DIR)/reallocarray.c.o: $(CONFUSE_DIR)/reallocarray.c
+	@mkdir -p $(@D)
+	$(CC) $(CONFUSE_CFLAGS) -c $< -o $@
+
+CONFUSE_OBJS := $(CONFUSE_BUILD_DIR)/confuse.c.o $(CONFUSE_BUILD_DIR)/lexer.c.o $(CONFUSE_BUILD_DIR)/reallocarray.c.o
+
 $(APPS_BUILD_DIR)/hello_initsys/main.c.o: apps/hello_initsys/main.c
 	@mkdir -p $(@D)
-	$(CC) $(LIBC_SHIM_CFLAGS) -c $< -o $@
+	$(CC) $(LIBC_SHIM_CFLAGS) -I$(CONFUSE_DIR) -c $< -o $@
 
-$(APPS_BUILD_DIR)/hello_initsys/hello_initsys: $(APPS_BUILD_DIR)/hello_initsys/main.c.o $(LIBC_SHIM_OBJS) apps/link/hello_initsys.ld
+$(APPS_BUILD_DIR)/hello_initsys/hello_initsys: $(APPS_BUILD_DIR)/hello_initsys/main.c.o $(CONFUSE_OBJS) $(LIBC_SHIM_OBJS) apps/link/hello_initsys.ld
 	$(LD) $(APP_LDFLAGS) -T apps/link/hello_initsys.ld -e _start -o $@ \
-	    $(APPS_BUILD_DIR)/hello_initsys/main.c.o $(LIBC_SHIM_OBJS)
+	    $(APPS_BUILD_DIR)/hello_initsys/main.c.o $(CONFUSE_OBJS) $(LIBC_SHIM_OBJS)
 
 MINIBOX_SRCS := $(filter-out apps/minibox/src/init.c,$(wildcard apps/minibox/src/*.c)) \
                 $(wildcard apps/minibox/libmb/*.c) apps/minibox/robu-stubs.c
@@ -178,7 +212,8 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
                          $(APPS_BUILD_DIR)/hello_initsys/hello_initsys \
                          $(APPS_BUILD_DIR)/minibox/minibox \
                          $(APPS_BUILD_DIR)/sh/sh \
-                         $(APPS_BUILD_DIR)/stub/stub
+                         $(APPS_BUILD_DIR)/stub/stub \
+                         apps/hello_initsys/rc.conf
 	rm -rf $(ROOTFS_STAGE)
 	mkdir -p $(ROOTFS_STAGE)
 	cp $(APPS_BUILD_DIR)/devfs/devfs $(ROOTFS_STAGE)/devfs
@@ -186,6 +221,7 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
 	cp $(APPS_BUILD_DIR)/procfs/procfs $(ROOTFS_STAGE)/procfs
 	cp $(APPS_BUILD_DIR)/sysfs/sysfs $(ROOTFS_STAGE)/sysfs
 	cp $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(ROOTFS_STAGE)/hello_initsys
+	cp apps/hello_initsys/rc.conf $(ROOTFS_STAGE)/rc.conf
 	cp $(APPS_BUILD_DIR)/minibox/minibox $(ROOTFS_STAGE)/minibox
 	cp $(APPS_BUILD_DIR)/sh/sh $(ROOTFS_STAGE)/sh
 	for n in $(ROOTFS_MINIBOX_ALIASES); do cp $(APPS_BUILD_DIR)/minibox/minibox $(ROOTFS_STAGE)/$$n; done

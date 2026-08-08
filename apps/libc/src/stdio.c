@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <fcntl.h>
 #include "libc_internal.h"
 struct FILE {
     int fd;
@@ -90,10 +91,25 @@ void setbuf(FILE *f, char *buf) {
     setvbuf(f, buf, buf ? _IOFBF : _IONBF, buf ? BUFSIZ : 0);
 }
 FILE *fopen(const char *path, const char *mode) {
-    (void)path;
-    (void)mode;
-    errno = ENOSYS;
-    return 0;
+    if (!path || !mode || !mode[0]) {
+        errno = EINVAL;
+        return 0;
+    }
+    int plus = mode[1] == '+' || (mode[1] && mode[2] == '+');
+    int flags;
+    switch (mode[0]) {
+    case 'r': flags = plus ? O_RDWR : O_RDONLY; break;
+    case 'w': flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_TRUNC; break;
+    case 'a': flags = (plus ? O_RDWR : O_WRONLY) | O_CREAT | O_APPEND; break;
+    default:
+        errno = EINVAL;
+        return 0;
+    }
+    int fd = open(path, flags, 0666);
+    if (fd < 0) {
+        return 0;
+    }
+    return fdopen(fd, mode);
 }
 FILE *freopen(const char *path, const char *mode, FILE *stream) {
     (void)stream;
