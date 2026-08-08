@@ -1,24 +1,54 @@
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <confuse.h>
 
 extern int __libc_spawn(const char *name, char *const argv[], char *const envp[]);
+
+#define RC_CONF_PATH "/etc/rc.conf"
 
 int main(int argc, char **argv) {
     printf("[hello_initsys] init starting\n");
 
-    char *default_argv[] = { (char *)"sh", 0 };
+    static char rc_shell[64] = "sh";
+    int rc_respawn = 1;
+
+    static cfg_opt_t rc_opts[] = {
+        CFG_STR("shell", "sh", CFGF_NONE),
+        CFG_BOOL("respawn", cfg_true, CFGF_NONE),
+        CFG_END()
+    };
+    cfg_t *cfg = cfg_init(rc_opts, CFGF_NONE);
+    if (cfg) {
+        int cfg_rc = cfg_parse(cfg, RC_CONF_PATH);
+        if (cfg_rc == CFG_SUCCESS) {
+            const char *s = cfg_getstr(cfg, "shell");
+            if (s) {
+                strncpy(rc_shell, s, sizeof(rc_shell) - 1);
+                rc_shell[sizeof(rc_shell) - 1] = '\0';
+            }
+            rc_respawn = (cfg_getbool(cfg, "respawn") == cfg_true);
+            printf("[hello_initsys] loaded " RC_CONF_PATH ": shell='%s' respawn=%d\n",
+                   rc_shell, rc_respawn);
+        } else {
+            printf("[hello_initsys] no usable " RC_CONF_PATH ", using defaults: shell='%s' respawn=%d\n",
+                   rc_shell, rc_respawn);
+        }
+    }
+
+    char *default_argv[] = { rc_shell, 0 };
     const char *name;
     char **cmd_argv;
     if (argc > 1) {
         name = argv[1];
         cmd_argv = argv + 1;
     } else {
-        name = "sh";
+        name = rc_shell;
         cmd_argv = default_argv;
     }
 
-    for (;;) {
+    do {
         int rc = __libc_spawn(name, cmd_argv, environ);
         if (rc < 0) {
             printf("[hello_initsys] failed to start '%s'\n", name);
@@ -37,5 +67,8 @@ int main(int argc, char **argv) {
                 break;
             }
         }
-    }
+    } while (rc_respawn);
+
+    printf("[hello_initsys] respawn disabled, init exiting\n");
+    return 0;
 }

@@ -4,3 +4,6 @@
 [submodule "apps/minibox"]
 	path = apps/minibox
 	url = https://github.com/Qwer-TeX/minibox
+[submodule "apps/confuse"]
+	path = apps/confuse
+	url = https://github.com/libconfuse/libconfuse.git
