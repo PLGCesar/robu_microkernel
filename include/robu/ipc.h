@@ -32,6 +32,7 @@
 #define IPC_FLAG_SET_FSBASE (1 << 25)
 #define IPC_FLAG_SELF_TID (1 << 26)
 #define IPC_FLAG_EXEC (1 << 27)
+#define IPC_FLAG_MOUNT (1 << 28)
 #define IPC_ERR_NONE       0
 #define IPC_ERR_NOT_FOUND -1
 #define IPC_ERR_TIMEOUT   -2

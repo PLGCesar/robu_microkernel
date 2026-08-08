@@ -6,6 +6,24 @@
 #define ROBU_ABI_VERSION_MINOR 0
 #define KINFO_FEATURE_SMP        (1ULL << 0)
 #define KINFO_FEATURE_ELF_LOADER (1ULL << 1)
+#define MOUNT_PREFIX_MAX 24
+#define MOUNT_TABLE_MAX  8
+typedef struct {
+    uint32_t in_use;
+    uint32_t owner_tid;
+    char prefix[MOUNT_PREFIX_MAX];   /* e.g. "/dev/", "/proc/"; "" is the
+                                         catch-all fallback (ramfs's role) --
+                                         always "matches" via strncmp(...,0)
+                                         but has the shortest possible
+                                         length, so any real entry always
+                                         wins the longest-prefix-match over
+                                         it. Include the trailing '/' on
+                                         every non-catch-all prefix, same
+                                         convention sysdeps.cpp's old
+                                         strncmp(resolved, "/dev/", 5) chain
+                                         already used, so "/devfoo" can never
+                                         false-match a "/dev" mount. */
+} mount_entry_t;
 typedef struct {
     uint32_t abi_version_major;
     uint32_t abi_version_minor;
@@ -24,6 +42,8 @@ typedef struct {
     uint32_t abitest_exit_helper_tid;
     uint32_t procfs_tid;
     uint32_t sysfs_tid;
+    mount_entry_t mounts[MOUNT_TABLE_MAX];
+    volatile uint32_t mount_seq;
 } kinfo_page_t;
 static inline uint64_t kinfo_read_ticks(const volatile kinfo_page_t *k) {
     uint32_t seq0, seq1;
@@ -37,6 +57,50 @@ static inline uint64_t kinfo_read_ticks(const volatile kinfo_page_t *k) {
     } while (seq0 != seq1 || (seq0 & 1u));
     return ticks;
 }
+// Longest-prefix match across in_use mount entries. Returns the owning tid
+// (0 if nothing matches at all -- e.g. before ramfs has registered its ""
+// catch-all entry), and writes how many leading bytes of `path` matched the
+// winning prefix into *matched_len_out (0 for the catch-all entry) -- every
+// migrated server receives paths *relative to its own mount point*
+// (matching ramfs's original bare-name convention, generalized to every
+// backend), so the caller strips exactly this many bytes before sending.
+static inline uint32_t kinfo_resolve_mount(const volatile kinfo_page_t *k, const char *path,
+                                           int *matched_len_out) {
+    uint32_t seq0, seq1;
+    uint32_t best_tid;
+    int best_len;
+    do {
+        best_tid = 0;
+        best_len = -1;
+        seq0 = k->mount_seq;
+        asm volatile("" ::: "memory");
+        for (int i = 0; i < MOUNT_TABLE_MAX; i++) {
+            if (!k->mounts[i].in_use) {
+                continue;
+            }
+            int len = 0;
+            while (len < MOUNT_PREFIX_MAX && k->mounts[i].prefix[len]) {
+                len++;
+            }
+            int j = 0;
+            for (; j < len; j++) {
+                if (path[j] != k->mounts[i].prefix[j]) {
+                    break;
+                }
+            }
+            if (j == len && len > best_len) {
+                best_len = len;
+                best_tid = k->mounts[i].owner_tid;
+            }
+        }
+        asm volatile("" ::: "memory");
+        seq1 = k->mount_seq;
+    } while (seq0 != seq1 || (seq0 & 1u));
+    if (matched_len_out) {
+        *matched_len_out = best_len < 0 ? 0 : best_len;
+    }
+    return best_tid;
+}
 void kinfo_init(uint32_t boot_apic_id, uint32_t cpu_count);
 void kinfo_set_devfs_tid(uint32_t tid);
 void kinfo_set_test_report_tid(uint32_t tid);
@@ -48,6 +112,10 @@ void kinfo_set_ramfs_tid(uint32_t tid);
 void kinfo_set_abitest_exit_helper_tid(uint32_t tid);
 void kinfo_set_procfs_tid(uint32_t tid);
 void kinfo_set_sysfs_tid(uint32_t tid);
+// Returns 0 on success, -1 if the table is full. Caller (src/core/ipc.c's
+// IPC_FLAG_MOUNT handler) is responsible for authorization -- this function
+// just writes the slot.
+int kinfo_mount_add(const char *prefix, uint32_t owner_tid);
 static inline const kinfo_page_t *kinfo_user(void) {
     return (const kinfo_page_t *)KINFO_VA;
 }

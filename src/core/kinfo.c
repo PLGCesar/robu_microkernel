@@ -49,6 +49,30 @@ void kinfo_set_procfs_tid(uint32_t tid) {
 void kinfo_set_sysfs_tid(uint32_t tid) {
     kinfo->sysfs_tid = tid;
 }
+int kinfo_mount_add(const char *prefix, uint32_t owner_tid) {
+    int slot = -1;
+    for (int i = 0; i < MOUNT_TABLE_MAX; i++) {
+        if (!kinfo->mounts[i].in_use) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        return -1;
+    }
+    kinfo->mount_seq++;
+    asm volatile("" ::: "memory");
+    kinfo->mounts[slot].owner_tid = owner_tid;
+    int i = 0;
+    for (; i < MOUNT_PREFIX_MAX - 1 && prefix[i]; i++) {
+        kinfo->mounts[slot].prefix[i] = prefix[i];
+    }
+    kinfo->mounts[slot].prefix[i] = '\0';
+    kinfo->mounts[slot].in_use = 1;
+    asm volatile("" ::: "memory");
+    kinfo->mount_seq++;
+    return 0;
+}
 void kinfo_tick(uint64_t n) {
     kinfo->clock_seq++;
     asm volatile("" ::: "memory");
