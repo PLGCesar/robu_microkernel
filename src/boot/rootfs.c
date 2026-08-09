@@ -17,9 +17,6 @@ static tid_t ramfs_tid(void) {
     return (tid_t)kinfo_user()->ramfs_tid;
 }
 
-// mlibc-linked binaries are ~100x bigger than the old apps/libc ones (each
-// statically links libc.a/libm.a in full, no dynamic linking), so migrating
-// the rootfs to them needs a much bigger buffer than apps/libc ever did.
 #define ROOTFS_MAX_SIZE (24 * 1024 * 1024)
 
 static uint8_t rootfs_buf[ROOTFS_MAX_SIZE];
@@ -44,31 +41,6 @@ void rootfs_init(void) {
     cmdline_parse(arch_boot_cmdline());
 }
 
-// Split out of rootfs_init() so the cmdline gets parsed immediately (needed
-// by cmdline_get("force_fatal")/("quiet") right after arch_detect_memory()
-// returns), while the actual module copy runs later, once pmm_init() has
-// handed out the free frames arch_vm_map_page() below needs to build new
-// page-table pages.
-//
-// Why this needs its own mapping at all: this kernel's boot-time identity
-// map (boot.S's boot_pd) only covers the first 1 GiB of physical memory --
-// deliberately not extended further, since PDPT slot 1 ([1 GiB, 2 GiB)) is
-// the exact virtual range every ring-3 process already uses for its own
-// ELF/heap layout (apps/link/*.ld base addresses all start at 0x70000000+),
-// and slot 2 holds the shared kinfo_page_t mapping (KINFO_VA, kinfo_init()
-// runs later). Blanket-extending the static identity map into those slots
-// would corrupt every future process's address space, not just fix this.
-// The boot module's *tables* (PVH memmap/modlist, Multiboot2 tags) always
-// land within that first 1 GiB -- confirmed empirically, arch_detect_memory()
-// already reads them successfully -- but at larger -m sizes QEMU places the
-// module's actual *content* (rootfs.tar) near the top of "low" RAM, which
-// can land well past 1 GiB (observed: ~3 GiB at -m 4096, via QEMU's -d int
-// trace showing a #PF at that address). With no IDT installed yet at this
-// point in boot, that fault silently triple-faults into a reboot loop
-// instead of a diagnosable error. Mapping exactly the module's own pages
-// here -- not a blanket range -- fixes this for any module placement at any
-// RAM size, using only the general-purpose arch_vm_map_page() machinery
-// (which itself has no dependency on this).
 void rootfs_load_module(void) {
     paddr_t mod_base;
     uint64_t mod_len;
@@ -84,16 +56,7 @@ void rootfs_load_module(void) {
     vaddr_t page = mod_base & ~(PAGE_SIZE_4K - 1);
     vaddr_t end = (mod_base + mod_len + PAGE_SIZE_4K - 1) & ~(PAGE_SIZE_4K - 1);
     for (; page < end; page += PAGE_SIZE_4K) {
-        // Most module placements land inside boot.S's existing 2 MiB-page
-        // identity map (e.g. GRUB puts rootfs.tar around 26 MiB, well under
-        // the 1 GiB static ceiling) -- get_next_level() (vm_arch.c) doesn't
-        // check the PS bit before treating a PDE as a table pointer, so
-        // calling arch_vm_map_page() on an address already covered by a
-        // large page would misinterpret that page's own physical frame as a
-        // page-table pointer and corrupt it. arch_vm_translate() walks via
-        // walk_to_pte(), which does check PS, so it's the safe way to ask
-        // "is this already accessible" -- only build a fresh mapping when
-        // the answer is no.
+
         if (arch_vm_translate((paddr_t)&boot_pml4, page) != 0) {
             continue;
         }
@@ -124,11 +87,6 @@ void root_task_init(paddr_t untyped_base, uint64_t untyped_size) {
     kprintf("[boot] root task: tid=%u\n", root->tid);
 }
 
-// Copies the rootfs.tar entry named `rootfs_name` into ramfs at `ramfs_path`
-// (a real, byte-for-byte file, not a symlink). Used both for /bin's
-// non-minibox real binaries (sh + the stub commands) and for placing
-// hello_initsys at /usr/sbin -- FATALs on any failure since every caller
-// here is boot-critical seeding, matching this file's existing convention.
 static void seed_binary_copy(const char *rootfs_name, const char *ramfs_path) {
     const uint8_t *start, *end;
     if (rootfs_lookup(rootfs_name, &start, &end) != 0) {
@@ -169,14 +127,7 @@ void ramfs_bin_seed_init(void) {
         }
         seed_binary_copy(real_names[i], path);
     }
-    // Every command minibox itself implements (apps/minibox/src/minibox.c's
-    // commands[] table, filtered by apps/minibox/include/config.h's
-    // CONFIG_* gates -- "arch" and "init" are in the table but not
-    // config'd in, so they're excluded here too), symlinked to the one
-    // real copy above rather than duplicated: minibox dispatches on
-    // basename(argv[0]), so `ls`/`grep`/etc invoked through their symlink
-    // read minibox's own bytes via ramfs's transparent open()-time symlink
-    // resolution and still see the name they were actually invoked as.
+
     static const char *const minibox_cmds[] = {
         "basename", "cal", "cat", "clear", "cmp", "cp", "cut", "date",
         "dirname", "echo", "env", "expand", "factor", "false", "fold",

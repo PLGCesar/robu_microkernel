@@ -4,12 +4,7 @@
 #include "robu/arch.h"
 #include "pci.h"
 #include "portio.h"
-// Legacy virtio-pci register offsets from the I/O-space BAR0 base
-// (confirmed against the OASIS virtio spec's legacy-interface appendix,
-// section 4.1.4.8, and cross-checked against QEMU's own
-// include/standard-headers/linux/virtio_pci.h, during planning -- not
-// assumed from a secondhand table). Valid when MSI-X is disabled, which
-// QEMU's virtio-blk-pci is by default under a plain machine type.
+
 #define VIRTIO_REG_DEVICE_FEATURES 0x00
 #define VIRTIO_REG_GUEST_FEATURES  0x04
 #define VIRTIO_REG_QUEUE_ADDRESS   0x08
@@ -30,14 +25,7 @@
 #define VIRTIO_BLK_S_OK 0
 #define VIRTIO_BLK_DATA_MAX 4096
 #define VIRTIO_BLK_POLL_MAX_ITERS 10000000
-// The legacy interface has no per-queue size negotiation: QUEUE_NUM is
-// read-only, and the driver MUST lay out its ring at exactly that size
-// (confirmed against QEMU's hw/virtio/virtio-pci.c -- the legacy I/O-port
-// write path has no case for QUEUE_NUM, only modern's
-// VIRTIO_PCI_COMMON_Q_SIZE can shrink virtio_queue_set_num()). A ring
-// built for a smaller size silently desyncs from where the device expects
-// avail/used to live -- this cap just bounds the DMA allocation; the
-// actual size used is always dev_queue_size, read from the device.
+
 #define VIRTIO_BLK_MAX_QUEUE_SIZE 1024
 typedef struct {
     uint64_t addr;
@@ -62,11 +50,7 @@ static uint16_t last_seen_used_idx;
 static volatile virtio_blk_req_hdr_t *req_hdr;
 static volatile uint8_t *req_status;
 static volatile uint8_t *req_data;
-// avail: {flags:u16, idx:u16, ring[queue_size]:u16}; used: {flags:u16,
-// idx:u16, elem[queue_size]:{id:u32,len:u32}} -- see virtq_avail_t's
-// spec-defined layout. Accessed via byte offset from a runtime-sized base
-// (not a fixed-N struct) since queue_size is only known at boot, per
-// device.
+
 static inline volatile uint16_t *avail_idx_ptr(void) {
     return (volatile uint16_t *)(avail_base + 2);
 }
@@ -154,7 +138,7 @@ int virtio_blk_init(void) {
         return -1;
     }
     uint16_t cmd = pci_cfg_read16(addr, 0x04);
-    pci_cfg_write16(addr, 0x04, cmd | 0x1 /* I/O space */ | 0x4 /* bus master */);
+    pci_cfg_write16(addr, 0x04, cmd | 0x1  | 0x4 );
     uint32_t bar0 = pci_cfg_read32(addr, 0x10);
     if (!(bar0 & 0x1)) {
         kprintf("[virtio_blk] BAR0 is not an I/O-space BAR, giving up\n");
@@ -164,7 +148,7 @@ int virtio_blk_init(void) {
     outb(io_base + VIRTIO_REG_DEVICE_STATUS, 0);
     outb(io_base + VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_ACKNOWLEDGE);
     outb(io_base + VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER);
-    // Negotiate no optional features -- plain sector read/write needs none.
+
     outl(io_base + VIRTIO_REG_GUEST_FEATURES, 0);
     outw(io_base + VIRTIO_REG_QUEUE_SELECT, 0);
     uint16_t dev_queue_size = inw(io_base + VIRTIO_REG_QUEUE_SIZE);

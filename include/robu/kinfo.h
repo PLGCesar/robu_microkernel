@@ -11,18 +11,7 @@
 typedef struct {
     uint32_t in_use;
     uint32_t owner_tid;
-    char prefix[MOUNT_PREFIX_MAX];   /* e.g. "/dev/", "/proc/"; "" is the
-                                         catch-all fallback (ramfs's role) --
-                                         always "matches" via strncmp(...,0)
-                                         but has the shortest possible
-                                         length, so any real entry always
-                                         wins the longest-prefix-match over
-                                         it. Include the trailing '/' on
-                                         every non-catch-all prefix, same
-                                         convention sysdeps.cpp's old
-                                         strncmp(resolved, "/dev/", 5) chain
-                                         already used, so "/devfoo" can never
-                                         false-match a "/dev" mount. */
+    char prefix[MOUNT_PREFIX_MAX];
 } mount_entry_t;
 typedef struct {
     uint32_t abi_version_major;
@@ -57,13 +46,7 @@ static inline uint64_t kinfo_read_ticks(const volatile kinfo_page_t *k) {
     } while (seq0 != seq1 || (seq0 & 1u));
     return ticks;
 }
-// Longest-prefix match across in_use mount entries. Returns the owning tid
-// (0 if nothing matches at all -- e.g. before ramfs has registered its ""
-// catch-all entry), and writes how many leading bytes of `path` matched the
-// winning prefix into *matched_len_out (0 for the catch-all entry) -- every
-// migrated server receives paths *relative to its own mount point*
-// (matching ramfs's original bare-name convention, generalized to every
-// backend), so the caller strips exactly this many bytes before sending.
+
 static inline uint32_t kinfo_resolve_mount(const volatile kinfo_page_t *k, const char *path,
                                            int *matched_len_out) {
     uint32_t seq0, seq1;
@@ -112,9 +95,7 @@ void kinfo_set_ramfs_tid(uint32_t tid);
 void kinfo_set_abitest_exit_helper_tid(uint32_t tid);
 void kinfo_set_procfs_tid(uint32_t tid);
 void kinfo_set_sysfs_tid(uint32_t tid);
-// Returns 0 on success, -1 if the table is full. Caller (src/core/ipc.c's
-// IPC_FLAG_MOUNT handler) is responsible for authorization -- this function
-// just writes the slot.
+
 int kinfo_mount_add(const char *prefix, uint32_t owner_tid);
 static inline const kinfo_page_t *kinfo_user(void) {
     return (const kinfo_page_t *)KINFO_VA;

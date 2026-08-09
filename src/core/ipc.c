@@ -23,12 +23,7 @@ static tid_t pager_owner_tid = 0;
 void ipc_grant_pager_owner(tid_t tid) {
     pager_owner_tid = tid;
 }
-// Kernel-resident staging buffer for IPC_FLAG_BLK_IO's LOAD/READ_CHUNK/
-// WRITE_CHUNK/COMMIT sub-ops (src/core/virtio_blk.c's own req_data buffer
-// is driver-internal, DMA-mapped, and reused on every request -- this is a
-// separate, larger, per-session buffer the whole logical block lives in
-// between a caller's LOAD and its chunked reads, or its chunked writes and
-// COMMIT).
+
 #define BLK_STAGING_SIZE 4096
 static uint8_t blk_staging[BLK_STAGING_SIZE];
 static void payload_from_frame(msg_regs_t *m, const arch_uctx_t *f) {
@@ -306,22 +301,13 @@ void sys_ipc(void) {
         if (flags & IPC_FLAG_EXEC) {
             int rc = spawn_exec(cur, f->r8, f->r9);
             if (rc != IPC_ERR_NONE) {
-                // Only touch f on failure -- on success, elf_exec_current()
-                // already completely replaced *f (== cur->uctx) with the
-                // new image's entry state; writing to it here would corrupt
-                // the process we just became.
+
                 f->rax = (uint64_t)rc;
             }
             return;
         }
         if (flags & IPC_FLAG_MOUNT) {
-            // Only kernel-boot-spawned servers may register a mount --
-            // gated on parent_tid==0, which alloc_tcb() zero-initializes
-            // and only spawn_create()/spawn_fork_create() ever set nonzero
-            // (src/core/spawn.c). Every server started from
-            // src/boot/servers.c via elf_load_and_spawn() directly
-            // structurally, unforgeably satisfies this; nothing spawned by
-            // a userspace process (via IPC_FLAG_SPAWN/FORK) ever can.
+
             if (cur->parent_tid != 0) {
                 f->rax = (uint64_t)IPC_ERR_NO_CAP;
                 return;
@@ -339,14 +325,10 @@ void sys_ipc(void) {
             return;
         }
         if (flags & IPC_FLAG_BOOTFS) {
-            // Read-only bridge into the kernel-resident rootfs_buf
-            // (src/boot/rootfs.c) for apps/bootfs/bootfs.c -- ring-3 has no
-            // direct access to that memory, so every op is a round-trip
-            // here. Ungated: this only exposes the same boot-module bytes
-            // every process's own executable was already loaded from.
+
             uint64_t category = f->r8;
             if (category == 0) {
-                // STAT: name packed into r9/r10/r12 (24 bytes).
+
                 uint64_t words[3] = { f->r9, f->r10, f->r12 };
                 char name[25];
                 memcpy(name, words, 24);
@@ -361,8 +343,7 @@ void sys_ipc(void) {
                 return;
             }
             if (category == 1) {
-                // READDIR: index in r9; reply packs size into r8, name into
-                // r9/r10/r12.
+
                 uint64_t index = f->r9;
                 char name[25] = {0};
                 uint64_t size;
@@ -380,10 +361,7 @@ void sys_ipc(void) {
                 return;
             }
             if (category == 2) {
-                // READ: name in r9/r10/r12 (24 bytes), offset in r13, len
-                // in r14 (capped to 40 bytes, matching VFS_READ_MAX); reply
-                // returns the byte count in rax and the data across
-                // r8..r13.
+
                 uint64_t words[3] = { f->r9, f->r10, f->r12 };
                 char name[25];
                 memcpy(name, words, 24);
@@ -417,18 +395,14 @@ void sys_ipc(void) {
             return;
         }
         if (flags & IPC_FLAG_BLK_IO) {
-            // Gated like IPC_FLAG_CONSOLE_WRITE gates devfs: exactly one
-            // legitimate caller (apps/diskfs, granted via
-            // ipc_grant_blk_owner() at boot), everyone else is refused.
+
             if (cur->tid != blk_owner_tid || blk_owner_tid == 0) {
                 f->rax = (uint64_t)IPC_ERR_NO_CAP;
                 return;
             }
             uint64_t category = f->r8;
             if (category == 0) {
-                // LOAD: sector=r9, count=r10 (capped to 8, i.e. 4096
-                // bytes -- virtio_blk's own per-request max) -> reads the
-                // whole range into blk_staging in one virtio request.
+
                 uint64_t sector = f->r9;
                 uint64_t count = f->r10;
                 if (count == 0 || count > BLK_STAGING_SIZE / 512) {
@@ -439,8 +413,7 @@ void sys_ipc(void) {
                 return;
             }
             if (category == 1) {
-                // READ_CHUNK: offset=r9 -> up to 40 bytes of the
-                // already-LOADed staging buffer, no device access.
+
                 uint64_t offset = f->r9;
                 if (offset >= BLK_STAGING_SIZE) {
                     f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
@@ -463,9 +436,7 @@ void sys_ipc(void) {
                 return;
             }
             if (category == 2) {
-                // WRITE_CHUNK: offset=r9, len=r10 (capped to 24), data in
-                // r12/r13/r14 -> copied into the staging buffer, no device
-                // access yet (that's COMMIT's job).
+
                 uint64_t offset = f->r9;
                 uint64_t len = f->r10;
                 if (len > 24) {
@@ -481,8 +452,7 @@ void sys_ipc(void) {
                 return;
             }
             if (category == 3) {
-                // COMMIT: sector=r9, count=r10 (capped to 8) -> writes the
-                // staging buffer out in one virtio request.
+
                 uint64_t sector = f->r9;
                 uint64_t count = f->r10;
                 if (count == 0 || count > BLK_STAGING_SIZE / 512) {
@@ -496,16 +466,7 @@ void sys_ipc(void) {
             return;
         }
         if (flags & IPC_FLAG_RESOLVE_FAULT) {
-            // Gated like IPC_FLAG_BLK_IO gates apps/diskfs: exactly one
-            // legitimate caller (apps/pager, granted via
-            // ipc_grant_pager_owner() at boot), everyone else is refused.
-            // This is the one privileged operation (frame allocation +
-            // page-table write) the ring-3 pager cannot do itself -- the
-            // *decision* of which color/target/vaddr to resolve a fault
-            // with is made in apps/pager/pager.c; the kernel just carries
-            // it out on the pager's behalf, the same mechanism split
-            // IPC_FLAG_MAP/XFER/SHARE already use for cross-address-space
-            // mapping.
+
             if (cur->tid != pager_owner_tid || pager_owner_tid == 0) {
                 f->rax = (uint64_t)IPC_ERR_NO_CAP;
                 return;
@@ -581,9 +542,7 @@ void sys_ipc(void) {
                 f->r13 = sched_stats.timer_traps;
                 f->r14 = sched_stats.kicks_sent;
             } else if (category == 2) {
-                // Reboot (merged in from a fork) -- no bit left free for its
-                // own IPC_FLAG_REBOOT, so it rides in as a third SYS_INFO
-                // category instead. Never returns.
+
                 arch_reboot();
             } else {
                 f->rax = (uint64_t)IPC_ERR_NOT_FOUND;

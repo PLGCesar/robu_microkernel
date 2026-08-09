@@ -47,11 +47,6 @@ static void monitor_entry(void) {
     }
 }
 
-// Direct (non-IPC) round-trip proof that the virtio-blk driver itself
-// works, isolated from apps/diskfs (Part D, not written yet) -- gated
-// behind `blktest` on the kernel command line so it never runs by
-// default. Scribbles on sector 0, which is safe: there is no on-disk
-// filesystem yet for this to corrupt.
 static int blk_self_test_one(uint64_t sector, uint32_t count, uint8_t seed) {
     static uint8_t pattern[8 * 512];
     static uint8_t readback[8 * 512];
@@ -102,12 +97,7 @@ void kmain(void) {
     uint64_t mem_len;
     arch_detect_memory(&mem_base, &mem_len);
     rootfs_init();
-    // Looked up (not copied) this early purely so pmm_init() below can be
-    // told to leave this range alone -- the module hasn't been copied into
-    // rootfs_buf yet (rootfs_load_module() does that further down, once
-    // pmm_alloc() is available), and pmm_free() writes its free-list
-    // next-pointer directly into whatever frame it's handed, so treating
-    // the still-live module as free RAM would silently corrupt it in place.
+
     paddr_t mod_base = 0;
     uint64_t mod_len = 0;
     arch_boot_module(&mod_base, &mod_len);
@@ -140,11 +130,7 @@ void kmain(void) {
     kprintf("[boot] untyped region: %lu bytes at 0x%lx\n", (uint64_t)UNTYPED_REGION_SIZE, untyped_base);
     kprintf("[boot] frames: total=%lu free=%lu\n",
             pmm_stats.total_frames, pmm_stats.free_frames);
-    // Needs pmm_alloc() (via arch_vm_map_page()'s page-table allocation)
-    // already working, so it runs here, not alongside rootfs_init()'s
-    // cmdline_parse() right after arch_detect_memory() -- see
-    // rootfs_load_module()'s own comment for why it needs to map anything
-    // at all.
+
     rootfs_load_module();
 
     arch_gdt_init();

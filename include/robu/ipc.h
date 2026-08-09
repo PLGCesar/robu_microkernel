@@ -35,15 +35,7 @@
 #define IPC_FLAG_MOUNT (1 << 28)
 #define IPC_FLAG_BOOTFS (1 << 29)
 #define IPC_FLAG_BLK_IO (1 << 30)
-// Bit 31 was the last one free in this 32-bit flags word (sys_ipc()
-// truncates to (uint32_t)f->rdx on purpose, src/core/ipc.c) -- now claimed
-// by IPC_FLAG_RESOLVE_FAULT below, so every bit is in use. Reboot (merged
-// in from a fork) rides in as IPC_FLAG_SYS_INFO's category 2 instead of a
-// bit, matching the r8-encoded sub-op pattern IPC_FLAG_SYS_INFO/
-// IPC_FLAG_BLK_IO already use for exactly this situation. A future ring-3
-// virtio-blk driver would retire IPC_FLAG_BLK_IO (bit 30) and talk to
-// apps/diskfs over ordinary addressed IPC instead of a dest==0 verb,
-// freeing that bit back up.
+
 #define IPC_FLAG_RESOLVE_FAULT (1u << 31)
 #define IPC_ERR_NONE       0
 #define IPC_ERR_NOT_FOUND -1

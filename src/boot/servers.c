@@ -8,28 +8,19 @@
 #include "robu/rootfs.h"
 #include "../boot.h"
 
-// Must be the very first spawn of any kind in kmain() -- alloc_tcb() (src/
-// core/sched.c) is shared by the kernel-thread and ring-3-spawn paths alike
-// and hands out tids in call order, so being first here is what keeps this
-// process landing on tid 1, preserving PAGER_TID==1 as a literal constant
-// everywhere else in the codebase (src/boot/rootfs.c, servers.c, toybox.c,
-// testing.c, captable.c's ROOT_CHILD_PAGER_TID) with zero other call sites
-// needing to change.
 tid_t pager_init(void) {
     const uint8_t *pager_elf_start, *pager_elf_end;
     if (rootfs_lookup("pager", &pager_elf_start, &pager_elf_end) != 0) {
         kprintf("[boot] FATAL: rootfs has no entry named 'pager'\n");
         for (;;) { asm volatile("cli; hlt"); }
     }
-    // Self-referential pager_tid: safe specifically because this process
-    // must never fault after spawn (see apps/pager/pager.c) -- its own
-    // pager_tid is never actually exercised.
+
     tcb_t *pager = elf_load_and_spawn("pager", pager_elf_start, pager_elf_end, 18, PAGER_TID);
     if (!pager) {
         kprintf("[boot] FATAL: pager failed to load\n");
         for (;;) { asm volatile("cli; hlt"); }
     }
-    // Sole authorized IPC_FLAG_RESOLVE_FAULT caller (src/core/ipc.c).
+
     ipc_grant_pager_owner(pager->tid);
     kprintf("[boot] pager: tid=%u\n", pager->tid);
     return pager->tid;
@@ -69,12 +60,7 @@ tid_t ramfs_init(void) {
         for (;;) { asm volatile("cli; hlt"); }
     }
     kinfo_set_ramfs_tid(ramfs->tid);
-    // The catch-all mount: every path starts with "/", so this always
-    // matches (matched_len==1 from kinfo_resolve_mount()'s longest-prefix
-    // match), losing only to a more specific prefix like "/dev/". This also
-    // strips exactly the leading '/' before ramfs ever sees a name, matching
-    // its own bare-name convention (seed_fixed_dirs() in apps/ramfs/ramfs.c
-    // creates "bin"/"etc"/"var", not "/bin"/"/etc"/"/var").
+
     kinfo_mount_add("/", ramfs->tid);
     kprintf("[boot] ramfs server: tid=%u\n", ramfs->tid);
     return ramfs->tid;
@@ -141,10 +127,7 @@ tid_t diskfs_init(void) {
         kprintf("[boot] FATAL: diskfs server failed to load\n");
         for (;;) { asm volatile("cli; hlt"); }
     }
-    // Sole authorized IPC_FLAG_BLK_IO caller (src/core/ipc.c) -- granted
-    // before the mount is registered so diskfs's own boot-time mkfs
-    // check (diskfs_boot() in apps/diskfs/diskfs.c) is never racing
-    // against a caller that could reach /mnt/disk0/ before it's ready.
+
     ipc_grant_blk_owner(diskfs->tid);
     kinfo_mount_add("/mnt/disk0/", diskfs->tid);
     kprintf("[boot] diskfs server: tid=%u\n", diskfs->tid);

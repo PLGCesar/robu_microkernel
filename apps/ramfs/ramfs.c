@@ -1,30 +1,21 @@
 #include "robu/types.h"
 #include "robu/uipc.h"
 #include "robu/vfs.h"
-// Entry-count capacity (dirs/symlinks/files) is decoupled from data-storage
-// capacity below -- symlinks and directories carry no file content, so
-// giving every one of RAMFS_MAX_FILES slots its own RAMFS_MAX_DATA buffer
-// (the pre-symlink layout) would waste huge amounts of memory for no
-// reason. It's not just nominal waste, either: arch/elf_load's segment
-// mapper (src/core/elf.c) eagerly pmm_alloc()s every page up to p_memsz at
-// spawn time (this kernel has no lazy BSS paging), so a naively large
-// files[] array directly costs that much real, immediately-committed RAM.
+
 #define RAMFS_MAX_FILES 96
 #define RAMFS_MAX_BIG_FILES 24
 #define RAMFS_MAX_HANDLES 32
 #define RAMFS_SYMLINK_MAX_DEPTH 8
-// mlibc-linked binaries statically link the whole of libc.a/libm.a, so they
-// land well over the old 144 KiB apps/libc-era cap -- 747 KiB for the
-// smallest one seen so far (sh).
+
 #define RAMFS_MAX_DATA (2 * 1024 * 1024)
 typedef struct {
     int in_use;
     int is_dir;
     int is_symlink;
-    int data_slot;   /* -1 for dirs/symlinks; index into big_data[] for files */
+    int data_slot;
     uint64_t parent_ino;
     char name[VFS_PATH_MAX];
-    char target[VFS_PATH_MAX];  /* only meaningful when is_symlink */
+    char target[VFS_PATH_MAX];
     uint64_t size;
 } ramfs_file_t;
 typedef struct {
@@ -76,11 +67,7 @@ static int find_file(const char *name) {
     }
     return -1;
 }
-// Follows a chain of symlinks (each entry's `target` re-resolved via
-// find_file) down to the final non-symlink entry. Returns -1 for a
-// dangling target or a chain longer than RAMFS_SYMLINK_MAX_DEPTH (treated
-// as a loop). Callers that must act on the link itself, not its target --
-// handle_rename/handle_unlink -- use find_file() directly instead.
+
 static int resolve_path(const char *name) {
     char cur[VFS_PATH_MAX];
     set_name(cur, name, sizeof(cur));
@@ -181,7 +168,7 @@ static void handle_open(msg_regs_t *m) {
     }
     if (fidx < 0) {
         if (raw_idx >= 0 || !(flags & VFS_O_CREAT)) {
-            // raw_idx >= 0 here means a symlink whose target is missing/looped.
+
             reply->status = VFS_ERR_NOT_FOUND;
             return;
         }
@@ -438,13 +425,7 @@ static void seed_fixed_dirs(void) {
         seed_dir("usr/bin", usr_ino);
         seed_dir("usr/sbin", usr_ino);
     }
-    // Cosmetic-only: devfs/procfs own these paths outright via the mount
-    // table's longest-prefix match (kinfo_resolve_mount(), "/dev/" and
-    // "/proc/" both beat ramfs's own "/" catch-all), so nothing under
-    // these ever actually reaches ramfs. They exist here purely so `ls /`
-    // lists them, matching real Unix mountpoint-is-a-real-empty-dir
-    // convention -- the same reason resolve_mount_for_dir() in
-    // sysdeps.cpp had to special-case bare "/dev"/"/proc" stat()s already.
+
     seed_dir("dev", VFS_ROOT_INO);
     seed_dir("proc", VFS_ROOT_INO);
 }

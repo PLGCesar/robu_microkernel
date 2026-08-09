@@ -12,7 +12,7 @@
 #define DISKFS_SUPERBLOCK_BLOCK 0
 #define DISKFS_FILETABLE_BLOCK  1
 #define DISKFS_DATA_START_BLOCK 2
-#define DISKFS_MAGIC 0x524F42555F444653ULL /* arbitrary, distinctive */
+#define DISKFS_MAGIC 0x524F42555F444653ULL
 #define DISKFS_VERSION 1
 typedef struct {
     uint64_t magic;
@@ -38,9 +38,7 @@ typedef struct {
 } diskfs_handle_t;
 static diskfs_file_record_t files[DISKFS_MAX_FILES];
 static diskfs_handle_t handles[DISKFS_MAX_HANDLES];
-// No memcpy/memset here -- plain-C ring-3 apps in this codebase (unlike
-// mlibc-linked ones) have no libc linked in at all (see APP_COMMON_OBJ in
-// the Makefile), so every other server (ramfs.c etc.) uses manual loops.
+
 static void copy_bytes(void *dst_, const void *src_, uint64_t n) {
     uint8_t *dst = (uint8_t *)dst_;
     const uint8_t *src = (const uint8_t *)src_;
@@ -54,8 +52,7 @@ static void zero_bytes(void *dst_, uint64_t n) {
         dst[i] = 0;
     }
 }
-// --- IPC_FLAG_BLK_IO client helpers (kernel dest==0 verb, see
-// src/core/ipc.c) -----------------------------------------------------
+
 #define BLK_CHUNK_READ_MAX 40
 #define BLK_CHUNK_WRITE_MAX 24
 static int blk_load(uint32_t block_num) {
@@ -133,7 +130,7 @@ static int diskfs_write_block(uint32_t block_num, const uint8_t *buf) {
     }
     return blk_commit(block_num);
 }
-// --- file table -----------------------------------------------------
+
 static void persist_file_table(void) {
     uint8_t buf[DISKFS_BLOCK_SIZE];
     zero_bytes(buf, sizeof(buf));
@@ -168,7 +165,7 @@ static void diskfs_boot(void) {
         load_file_table();
     }
 }
-// --- in-memory lookups (mirrors apps/ramfs/ramfs.c's shape) ----------
+
 static int name_eq(const char *a, const char *b) {
     for (int i = 0; i < DISKFS_NAME_MAX; i++) {
         if (a[i] != b[i]) {
@@ -214,7 +211,7 @@ static int alloc_handle(void) {
 static int valid_handle(uint64_t h) {
     return h < DISKFS_MAX_HANDLES && handles[h].in_use;
 }
-// --- vfs.h op handlers ------------------------------------------------
+
 static void handle_open(msg_regs_t *m) {
     char name[VFS_PATH_MAX];
     const vfs_open_req_t *req = (const vfs_open_req_t *)m;
@@ -362,9 +359,7 @@ static void handle_stat(msg_regs_t *m) {
     }
     vfs_stat_reply_t *reply = (vfs_stat_reply_t *)m;
     if (name[0] == '\0') {
-        // The mount's own root (see resolve_mount_for_dir() in
-        // sysdeps.cpp) -- diskfs is a flat namespace, so this is the only
-        // directory it ever reports.
+
         reply->status = 0;
         reply->size = 0;
         reply->is_dir = 1;

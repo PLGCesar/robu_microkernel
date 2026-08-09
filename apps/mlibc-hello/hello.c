@@ -48,14 +48,6 @@ static void fork_and_pipe_test(void) {
 extern int __libc_spawn(const char *name, char *const argv[], char *const envp[]);
 extern char **environ;
 
-// Classic fork()+exec()+waitpid() pattern: a real child process, whose
-// image gets fully replaced by a *different* program (minibox's `touch`,
-// aliased in the rootfs -- unlike most other minibox applets, which are
-// only reachable via argv[0] dispatch through `minibox`, not as standalone
-// rootfs entries). Verified two ways: the child's exit status, and the real
-// side effect (the file existing afterward) -- if execve() had silently
-// failed and the child just fell through to running more of hello's own
-// code, neither would be true.
 static void exec_test(void) {
     const char *exec_path = "/var/tmp/exec-test.txt";
     remove(exec_path);
@@ -69,9 +61,7 @@ static void exec_test(void) {
     if (pid == 0) {
         char *const argv[] = { "touch", (char *)exec_path, 0 };
         execve("touch", argv, environ);
-        // _exit() (unlike exit()) does not flush stdio -- fflush explicitly
-        // so this diagnostic actually reaches the console instead of being
-        // silently discarded along with the rest of this process's buffer.
+
         printf("exec test (child): execve() failed: %s\n", strerror(errno));
         fflush(stdout);
         _exit(123);
@@ -88,12 +78,6 @@ static void exec_test(void) {
                                       : "MISSING (execve did not actually run touch)");
 }
 
-// Simulates the real `producer | cat` shell-pipeline shape: inject data
-// directly into a pipe (standing in for a producer process), redirect a
-// *spawned* child's stdin onto the read end via dup2 (exactly what a real
-// shell does before calling __libc_spawn(), since there's no fork()+exec()
-// image-replace here -- see docs/libc-and-abi-reference.md §4.3), and check
-// the child (minibox's own `cat`) actually sees the data on its stdin.
 static void spawn_pipeline_test(void) {
     int fds[2];
     if (pipe(fds) != 0) {

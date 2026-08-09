@@ -150,16 +150,7 @@ int spawn_create(tcb_t *caller, vaddr_t req_va, uint64_t req_len, tid_t *out_tid
     *out_tid = child->tid;
     return IPC_ERR_NONE;
 }
-// Same wire format and validation shape as spawn_create() (deliberately --
-// one request format for both "create a new process" and "become a new
-// process"), but drives elf_exec_current() instead of
-// elf_load_and_spawn_req(): the caller's own tid, parent_tid, and fd table
-// (which lives in the caller's own process memory and is untouched by an
-// address-space swap) all survive: real execve() semantics. There's no
-// nfds/fds handling here -- POSIX exec() inherits every open fd unless it
-// was marked close-on-exec, and nothing in this codebase marks any fd
-// close-on-exec yet, so "inherit everything" is already the correct
-// behavior with zero extra work.
+
 int spawn_exec(tcb_t *caller, vaddr_t req_va, uint64_t req_len) {
     if (caller->address_space == 0) {
         return IPC_ERR_NO_CAP;

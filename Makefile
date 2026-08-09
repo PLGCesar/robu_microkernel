@@ -10,8 +10,7 @@ ifeq ($(BUILD_SYS),clang)
   CC := clang
   AS := clang -x assembler-with-cpp
   LD := ld.lld
-  # llvm-strip (unlike clang/ld.lld) isn't symlinked onto PATH by the
-  # Homebrew LLVM keg; macOS's own /usr/bin/strip is Mach-O only, not ELF.
+
   STRIP := $(shell command -v llvm-strip 2>/dev/null || echo /opt/homebrew/opt/llvm/bin/llvm-strip)
 else ifeq ($(BUILD_SYS),gcc)
   CC := $(ARCH)-elf-gcc
@@ -127,13 +126,6 @@ MLIBC_BUILD_DIR := $(BUILD_DIR)/mlibc
 MLIBC_SYSROOT := $(abspath $(BUILD_DIR)/mlibc-sysroot)
 MLIBC_CROSS := apps/mlibc-robu-cross.ini
 
-# apps/mlibc-robu-cross.ini's [binaries] section uses bare tool names
-# (clang, llvm-ar, ...) so the same cross-file works unmodified on Linux
-# CI, where those are already on PATH. On macOS they aren't -- Apple's own
-# /usr/bin/clang would otherwise shadow the real LLVM toolchain this
-# project needs, and llvm-ar/llvm-strip aren't on PATH at all by default --
-# so Homebrew's LLVM bin dir is prepended here, for this build step only.
-# Harmless no-op on Linux/anywhere that path doesn't exist.
 MLIBC_TOOLCHAIN_PATH := /opt/homebrew/opt/llvm/bin:$(PATH)
 
 mlibc:
@@ -272,18 +264,9 @@ QEMU ?= qemu-system-x86_64
 QEMU_SMP ?= 2
 QEMU_MEM ?= 256
 QEMU_APPEND ?= root=root_task starter=hello_initsys
-# Zero-filled, not qemu-img-created -- that's exactly what diskfs's own
-# mkfs-on-first-boot (apps/diskfs/diskfs.c's diskfs_boot()) expects, no
-# host tooling dependency beyond truncate. Persists across `make run`
-# invocations by design (see scripts/diskfs-persist-test.sh); `make clean`
-# does not remove it -- delete it by hand to force reformatting.
+
 QEMU_DISK ?= $(BUILD_DIR)/diskfs.img
 
-# grub-mkrescue isn't reliably available on macOS (it isn't on this dev
-# machine at all), so it runs inside a throwaway (--rm) Ubuntu container
-# instead of requiring host GRUB tooling. Native compilation -- clang/lld,
-# mlibc, every app build above -- stays entirely on the host; only this one
-# step, which needs grub-pc-bin/xorriso/mtools, is containerized.
 GRUB_DOCKER ?= docker
 GRUB_DOCKER_IMAGE ?= ubuntu:24.04
 

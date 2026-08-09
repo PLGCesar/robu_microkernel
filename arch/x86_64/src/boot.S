@@ -1,8 +1,8 @@
 .section .note.Xen, "a", @note
 .align 4
-    .long 4                 /* namesz: "Xen" + NUL */
-    .long 4                 /* descsz: one 32-bit entry address */
-    .long 18                /* XEN_ELFNOTE_PHYS32_ENTRY */
+    .long 4
+    .long 4
+    .long 18
     .asciz "Xen"
     .long start
 
@@ -63,7 +63,6 @@ gdt64_ptr:
 start:
     cli
 
-    /* Verifica se o boot veio via Multiboot2 (eax = 0x36d76289) ou PVH */
     cmpl $0x36d76289, %eax
     je 1f
     movl %ebx, pvh_start_info_ptr
@@ -90,15 +89,15 @@ start:
     movl %eax, %cr3
 
     movl %cr4, %eax
-    orl $((1 << 5) | (1 << 9) | (1 << 10)), %eax  /* PAE | OSFXSR | OSXMMEXCPT */
+    orl $((1 << 5) | (1 << 9) | (1 << 10)), %eax
     movl %eax, %cr4
     movl $0xC0000080, %ecx
     rdmsr
     orl $((1 << 8) | (1 << 11)), %eax
     wrmsr
     movl %cr0, %eax
-    andl $~(1 << 2), %eax    /* EM=0: SSE/x87 execute instead of trapping */
-    orl $(0x80000000 | (1 << 1)), %eax  /* PG=1, MP=1 */
+    andl $~(1 << 2), %eax
+    orl $(0x80000000 | (1 << 1)), %eax
     movl %eax, %cr0
 
     lgdt gdt64_ptr
