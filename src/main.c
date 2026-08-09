@@ -8,6 +8,8 @@
 #include "robu/kinfo.h"
 #include "robu/cmdline.h"
 #include "robu/untyped.h"
+#include "robu/dma.h"
+#include "robu/virtio_blk.h"
 #include "lapic.h"
 #include "smp.h"
 #include "percpu.h"
@@ -15,6 +17,7 @@
 #include "boot.h"
 
 #define UNTYPED_REGION_SIZE (128u * 1024)
+#define DMA_REGION_SIZE (256u * 1024)
 
 int quiet_mode;
 
@@ -73,6 +76,44 @@ static void monitor_entry(void) {
     }
 }
 
+// Direct (non-IPC) round-trip proof that the virtio-blk driver itself
+// works, isolated from apps/diskfs (Part D, not written yet) -- gated
+// behind `blktest` on the kernel command line so it never runs by
+// default. Scribbles on sector 0, which is safe: there is no on-disk
+// filesystem yet for this to corrupt.
+static int blk_self_test_one(uint64_t sector, uint32_t count, uint8_t seed) {
+    static uint8_t pattern[8 * 512];
+    static uint8_t readback[8 * 512];
+    uint32_t bytes = count * 512;
+    for (uint32_t i = 0; i < bytes; i++) {
+        pattern[i] = (uint8_t)(i * 37 + seed);
+        readback[i] = 0;
+    }
+    if (virtio_blk_write(sector, count, pattern) != 0) {
+        kprintf("[blktest] sector=%lu count=%u write FAILED\n", sector, count);
+        return -1;
+    }
+    if (virtio_blk_read(sector, count, readback) != 0) {
+        kprintf("[blktest] sector=%lu count=%u read FAILED\n", sector, count);
+        return -1;
+    }
+    for (uint32_t i = 0; i < bytes; i++) {
+        if (pattern[i] != readback[i]) {
+            kprintf("[blktest] sector=%lu count=%u MISMATCH at byte %u: wrote %u read %u\n",
+                    sector, count, i, pattern[i], readback[i]);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void blk_self_test(void) {
+    if (blk_self_test_one(0, 1, 11) != 0) return;
+    if (blk_self_test_one(1000, 1, 77) != 0) return;
+    if (blk_self_test_one(5000, 8, 200) != 0) return;
+    kprintf("[blktest] PASS\n");
+}
+
 void kmain(void) {
     arch_console_init();
     arch_fpu_boot_init();
@@ -103,16 +144,19 @@ void kmain(void) {
     if (cmdline_get("force_fatal")) {
         effective_len = 0;
     }
-    if (effective_len < UNTYPED_REGION_SIZE) {
-        kprintf("[boot] FATAL: not enough identity-mapped RAM for the untyped region "
+    if (effective_len < UNTYPED_REGION_SIZE + DMA_REGION_SIZE) {
+        kprintf("[boot] FATAL: not enough identity-mapped RAM for the untyped+DMA regions "
                 "(have %lu bytes, need %lu)\n",
-                effective_len, (uint64_t)UNTYPED_REGION_SIZE);
+                effective_len, (uint64_t)(UNTYPED_REGION_SIZE + DMA_REGION_SIZE));
         for (;;) { asm volatile("cli; hlt"); }
     }
-    uint64_t pmm_len = effective_len - UNTYPED_REGION_SIZE;
-    paddr_t untyped_base = mem_base + pmm_len;
+    uint64_t pmm_len = effective_len - UNTYPED_REGION_SIZE - DMA_REGION_SIZE;
+    paddr_t dma_region_base = mem_base + pmm_len;
+    paddr_t untyped_base = dma_region_base + DMA_REGION_SIZE;
     pmm_init(mem_base, pmm_len);
+    dma_region_init(dma_region_base, DMA_REGION_SIZE);
     untyped_init(untyped_base, UNTYPED_REGION_SIZE);
+    kprintf("[boot] dma region: %lu bytes at 0x%lx\n", (uint64_t)DMA_REGION_SIZE, dma_region_base);
     kprintf("[boot] untyped region: %lu bytes at 0x%lx\n", (uint64_t)UNTYPED_REGION_SIZE, untyped_base);
     kprintf("[boot] frames: total=%lu free=%lu\n",
             pmm_stats.total_frames, pmm_stats.free_frames);
@@ -126,12 +170,9 @@ void kmain(void) {
     vm_init();
     lapic_init();
     pci_log_devices();
-    pci_addr_t virtio_blk_addr;
-    if (pci_find_device(0x1af4, 0x1001, &virtio_blk_addr) == 0) {
-        kprintf("[pci] virtio-blk found at bus=%x dev=%x fn=%x\n",
-                virtio_blk_addr.bus, virtio_blk_addr.device, virtio_blk_addr.function);
-    } else {
-        kprintf("[pci] no virtio-blk device (vendor=1af4 device=1001) found\n");
+    virtio_blk_init();
+    if (virtio_blk_present() && cmdline_get("blktest")) {
+        blk_self_test();
     }
     arch_timer_calibrate();
     arch_timer_percpu_init();

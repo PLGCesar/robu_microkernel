@@ -34,6 +34,7 @@
 #define IPC_FLAG_EXEC (1 << 27)
 #define IPC_FLAG_MOUNT (1 << 28)
 #define IPC_FLAG_BOOTFS (1 << 29)
+#define IPC_FLAG_BLK_IO (1 << 30)
 #define IPC_ERR_NONE       0
 #define IPC_ERR_NOT_FOUND -1
 #define IPC_ERR_TIMEOUT   -2
@@ -43,4 +44,5 @@
 #define IPC_ERR_NO_MEM     -6
 void sys_ipc(void);
 void ipc_grant_console_writer(tid_t tid);
+void ipc_grant_blk_owner(tid_t tid);
 #endif

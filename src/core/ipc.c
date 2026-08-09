@@ -9,11 +9,24 @@
 #include "robu/pmm.h"
 #include "robu/kinfo.h"
 #include "robu/rootfs.h"
+#include "robu/virtio_blk.h"
 #include "robu/arch.h"
 static tid_t console_writer_tid = 0;
 void ipc_grant_console_writer(tid_t tid) {
     console_writer_tid = tid;
 }
+static tid_t blk_owner_tid = 0;
+void ipc_grant_blk_owner(tid_t tid) {
+    blk_owner_tid = tid;
+}
+// Kernel-resident staging buffer for IPC_FLAG_BLK_IO's LOAD/READ_CHUNK/
+// WRITE_CHUNK/COMMIT sub-ops (src/core/virtio_blk.c's own req_data buffer
+// is driver-internal, DMA-mapped, and reused on every request -- this is a
+// separate, larger, per-session buffer the whole logical block lives in
+// between a caller's LOAD and its chunked reads, or its chunked writes and
+// COMMIT).
+#define BLK_STAGING_SIZE 4096
+static uint8_t blk_staging[BLK_STAGING_SIZE];
 static void payload_from_frame(msg_regs_t *m, const arch_uctx_t *f) {
     m->word[0] = f->r8;
     m->word[1] = f->r9;
@@ -387,6 +400,85 @@ void sys_ipc(void) {
                 f->r10 = outwords[2];
                 f->r12 = outwords[3];
                 f->r13 = outwords[4];
+                return;
+            }
+            f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+            return;
+        }
+        if (flags & IPC_FLAG_BLK_IO) {
+            // Gated like IPC_FLAG_CONSOLE_WRITE gates devfs: exactly one
+            // legitimate caller (apps/diskfs, granted via
+            // ipc_grant_blk_owner() at boot), everyone else is refused.
+            if (cur->tid != blk_owner_tid || blk_owner_tid == 0) {
+                f->rax = (uint64_t)IPC_ERR_NO_CAP;
+                return;
+            }
+            uint64_t category = f->r8;
+            if (category == 0) {
+                // LOAD: sector=r9, count=r10 (capped to 8, i.e. 4096
+                // bytes -- virtio_blk's own per-request max) -> reads the
+                // whole range into blk_staging in one virtio request.
+                uint64_t sector = f->r9;
+                uint64_t count = f->r10;
+                if (count == 0 || count > BLK_STAGING_SIZE / 512) {
+                    count = BLK_STAGING_SIZE / 512;
+                }
+                int rc = virtio_blk_read(sector, (uint32_t)count, blk_staging);
+                f->rax = (uint64_t)(rc == 0 ? IPC_ERR_NONE : IPC_ERR_TIMEOUT);
+                return;
+            }
+            if (category == 1) {
+                // READ_CHUNK: offset=r9 -> up to 40 bytes of the
+                // already-LOADed staging buffer, no device access.
+                uint64_t offset = f->r9;
+                if (offset >= BLK_STAGING_SIZE) {
+                    f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+                    return;
+                }
+                uint64_t n = BLK_STAGING_SIZE - offset;
+                if (n > 40) {
+                    n = 40;
+                }
+                uint8_t buf[40] = {0};
+                memcpy(buf, blk_staging + offset, n);
+                uint64_t words[5];
+                memcpy(words, buf, 40);
+                f->rax = (uint64_t)n;
+                f->r8 = words[0];
+                f->r9 = words[1];
+                f->r10 = words[2];
+                f->r12 = words[3];
+                f->r13 = words[4];
+                return;
+            }
+            if (category == 2) {
+                // WRITE_CHUNK: offset=r9, len=r10 (capped to 24), data in
+                // r12/r13/r14 -> copied into the staging buffer, no device
+                // access yet (that's COMMIT's job).
+                uint64_t offset = f->r9;
+                uint64_t len = f->r10;
+                if (len > 24) {
+                    len = 24;
+                }
+                if (offset >= BLK_STAGING_SIZE || offset + len > BLK_STAGING_SIZE) {
+                    f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+                    return;
+                }
+                uint64_t words[3] = { f->r12, f->r13, f->r14 };
+                memcpy(blk_staging + offset, words, len);
+                f->rax = (uint64_t)IPC_ERR_NONE;
+                return;
+            }
+            if (category == 3) {
+                // COMMIT: sector=r9, count=r10 (capped to 8) -> writes the
+                // staging buffer out in one virtio request.
+                uint64_t sector = f->r9;
+                uint64_t count = f->r10;
+                if (count == 0 || count > BLK_STAGING_SIZE / 512) {
+                    count = BLK_STAGING_SIZE / 512;
+                }
+                int rc = virtio_blk_write(sector, (uint32_t)count, blk_staging);
+                f->rax = (uint64_t)(rc == 0 ? IPC_ERR_NONE : IPC_ERR_TIMEOUT);
                 return;
             }
             f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
