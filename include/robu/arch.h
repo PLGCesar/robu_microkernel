@@ -9,6 +9,7 @@ void arch_timer_kick_cpu(uint32_t cpu_id);
 void arch_panic_freeze_other_cores(void);
 void arch_tlb_shootdown(paddr_t aspace, vaddr_t va);
 void arch_tlb_shootdown_handle_local(void);
+void arch_reboot(void) __attribute__((noreturn));
 typedef struct {
     uint64_t sent;
     uint64_t timeouts;

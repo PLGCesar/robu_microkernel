@@ -7,10 +7,13 @@
 #include "robu/spawn.h"
 #include "robu/pipe.h"
 #include "robu/pmm.h"
+#include "robu/arch.h"
+
 static tid_t console_writer_tid = 0;
 void ipc_grant_console_writer(tid_t tid) {
     console_writer_tid = tid;
 }
+
 static void payload_from_frame(msg_regs_t *m, const arch_uctx_t *f) {
     m->word[0] = f->r8;
     m->word[1] = f->r9;
@@ -19,6 +22,7 @@ static void payload_from_frame(msg_regs_t *m, const arch_uctx_t *f) {
     m->word[4] = f->r13;
     m->word[5] = f->r14;
 }
+
 static void payload_to_frame(arch_uctx_t *f, const msg_regs_t *m) {
     f->r8 = m->word[0];
     f->r9 = m->word[1];
@@ -27,6 +31,7 @@ static void payload_to_frame(arch_uctx_t *f, const msg_regs_t *m) {
     f->r13 = m->word[4];
     f->r14 = m->word[5];
 }
+
 static void sendq_append(tcb_t *rcv, tcb_t *s) {
     s->sq_next = NULL;
     if (rcv->send_q_tail) {
@@ -36,6 +41,7 @@ static void sendq_append(tcb_t *rcv, tcb_t *s) {
     }
     rcv->send_q_tail = s;
 }
+
 static tcb_t *sendq_take(tcb_t *rcv, tid_t filter) {
     tcb_t *prev = NULL;
     for (tcb_t *s = rcv->send_q_head; s; prev = s, s = s->sq_next) {
@@ -55,12 +61,14 @@ static tcb_t *sendq_take(tcb_t *rcv, tid_t filter) {
     }
     return NULL;
 }
+
 static void deliver_to_frame(tcb_t *rcv, tid_t from, const msg_regs_t *m) {
     arch_uctx_t *f = &rcv->uctx;
     payload_to_frame(f, m);
     f->rsi = from;
     f->rax = (uint64_t)IPC_ERR_NONE;
 }
+
 static void complete_parked_sender(tcb_t *cur, arch_uctx_t *f, tcb_t *s) {
     int xfer_rc = 0;
     if (s->ipc_flags & IPC_FLAG_MAP) {
@@ -86,6 +94,7 @@ static void complete_parked_sender(tcb_t *cur, arch_uctx_t *f, tcb_t *s) {
         sched_wake(s);
     }
 }
+
 void sys_ipc(void) {
     tcb_t *cur = current_thread;
     arch_uctx_t *f = &cur->uctx;
@@ -93,6 +102,12 @@ void sys_ipc(void) {
     tid_t src_filter = (tid_t)f->rsi;
     uint32_t flags = (uint32_t)f->rdx;
     int want_recv = flags & IPC_FLAG_RECV;
+
+    if (flags & IPC_FLAG_REBOOT) {
+        arch_reboot();
+        return;
+    }
+
     if (dest_tid == 0 && !want_recv) {
         if (flags & IPC_FLAG_RETYPE) {
             uint64_t out_slot = 0, out_addr = 0;

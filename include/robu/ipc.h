@@ -29,6 +29,7 @@
 #define IPC_FLAG_THREAD_INFO (1 << 22)
 #define IPC_FLAG_SYS_INFO (1 << 23)
 #define IPC_FLAG_FORK (1 << 24)
+#define IPC_FLAG_REBOOT (1 << 25)
 #define IPC_ERR_NONE       0
 #define IPC_ERR_NOT_FOUND -1
 #define IPC_ERR_TIMEOUT   -2

@@ -48,9 +48,8 @@ static void pager_entry(void) {
         arch_vm_map_page(ft->address_space, page_va, frame,
                          VM_PROT_READ | VM_PROT_WRITE | VM_PROT_USER);
         pager_faults_resolved++;
-        SAFE_PRINT("[pager] tid=%u '%s' faulted at 0x%lx -> frame 0x%lx "
-                   "(color %d), mapped and resumed (#%lu)\n",
-                   faulter, ft->name, fault_addr, frame, color, pager_faults_resolved);
+        SAFE_PRINT("\033[35m[pager]\033[0m tid=%u '%s' faulted at 0x%lx -> frame 0x%lx (mapped #%lu)\n",
+                   faulter, ft->name, fault_addr, frame, pager_faults_resolved);
         ipc_send(faulter, NULL);
     }
 }
@@ -64,24 +63,21 @@ static void monitor_entry(void) {
         ipc_recv(IPC_TID_ANY, &m, &from);
         total++;
         if (total % 25 == 0) {
-            SAFE_PRINT("[monitor] ring-3 tid=%u ping #%lu addr=0x%lx "
-                       "kinfo(ver=%lu.%lu tick=%lu) (%lu pings received total)\n",
-                       from, m.word[0], m.word[1],
-                       m.word[2] >> 16, m.word[2] & 0xFFFF, m.word[3], total);
+            SAFE_PRINT("\033[36m[monitor]\033[0m ring3 tid=%u ping #%lu addr=0x%lx kinfo tick=%lu\n",
+                       from, m.word[0], m.word[1], m.word[3]);
         }
     }
 }
 
 void kmain(void) {
     arch_console_init();
-    kputs("");
-    kputs("Robu Kernel 0.9 x86_64 booting...");
+    kputs("\033[1;32mRobu Kernel 0.9 x86_64 booting...\033[0m");
     uint32_t boot_magic;
     if (arch_boot_magic(&boot_magic) == 0) {
-        kprintf("[boot] robu_kernel -- loader magic 0x%x (valid), cores=%u\n",
+        kprintf("\033[36m[boot]\033[0m robu_kernel -- loader magic 0x%x, cores=%u\n",
                 boot_magic, (unsigned)MAX_CPUS);
     } else {
-        kprintf("[boot] robu_kernel -- loader magic unavailable, cores=%u\n",
+        kprintf("\033[36m[boot]\033[0m robu_kernel -- loader magic unavailable, cores=%u\n",
                 (unsigned)MAX_CPUS);
     }
     paddr_t mem_base;
@@ -102,23 +98,17 @@ void kmain(void) {
         effective_len = 0;
     }
     if (effective_len < UNTYPED_REGION_SIZE) {
-        kprintf("[boot] FATAL: not enough identity-mapped RAM for the untyped region "
-                "(have %lu bytes, need %lu)\n",
-                effective_len, (uint64_t)UNTYPED_REGION_SIZE);
+        kprintf("\033[1;31m[boot] FATAL: not enough RAM for untyped region\033[0m\n");
         for (;;) { asm volatile("cli; hlt"); }
     }
     uint64_t pmm_len = effective_len - UNTYPED_REGION_SIZE;
     paddr_t untyped_base = mem_base + pmm_len;
     pmm_init(mem_base, pmm_len);
     untyped_init(untyped_base, UNTYPED_REGION_SIZE);
-    kprintf("[boot] untyped region: %lu bytes at 0x%lx\n", (uint64_t)UNTYPED_REGION_SIZE, untyped_base);
-    kprintf("[boot] frames: total=%lu free=%lu\n",
+    kprintf("\033[36m[boot]\033[0m untyped region: %lu bytes at 0x%lx\n", (uint64_t)UNTYPED_REGION_SIZE, untyped_base);
+    kprintf("\033[36m[boot]\033[0m frames: total=%lu free=%lu\n",
             pmm_stats.total_frames, pmm_stats.free_frames);
-    SAFE_PRINT("[boot] alloc_calls=%lu free_calls=%lu\n",
-               pmm_stats.alloc_calls, pmm_stats.free_calls);
-    for (int c = 0; c < PMM_NUM_COLORS; c++) {
-        SAFE_PRINT("[boot]   color[%d] free=%lu\n", c, pmm_stats.free_by_color[c]);
-    }
+
     arch_gdt_init();
     arch_intr_init();
     vm_init();
@@ -128,7 +118,7 @@ void kmain(void) {
     kinfo_init(lapic_id(), 2);
     extern uint8_t kstack_top[];
     percpu_init_this_cpu(0, lapic_id(), kstack_top);
-    kprintf("[smp] BSP cpu_id=0 apic_id=%u\n", lapic_id());
+    kprintf("\033[33m[smp]\033[0m BSP cpu_id=0 apic_id=%u\n", lapic_id());
     smp_start_ap();
     sched_init();
 
