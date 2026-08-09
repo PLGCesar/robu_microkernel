@@ -65,3 +65,37 @@ int tar_find(const void *archive, uint64_t archive_len, const char *name,
     }
     return -1;
 }
+int tar_iterate(const void *archive, uint64_t archive_len, uint64_t index,
+                 char *name_out, uint64_t name_max, uint64_t *out_size) {
+    const uint8_t *base = (const uint8_t *)archive;
+    uint64_t off = 0;
+    uint64_t seen = 0;
+    while (off + USTAR_BLOCK <= archive_len) {
+        const uint8_t *block = base + off;
+        if (is_all_zero(block)) {
+            break;
+        }
+        const ustar_header_t *hdr = (const ustar_header_t *)block;
+        if (strncmp(hdr->magic, "ustar", 5) != 0) {
+            break;
+        }
+        uint64_t size = parse_octal(hdr->size, sizeof(hdr->size));
+        off += USTAR_BLOCK;
+        int is_regular = (hdr->typeflag == '0' || hdr->typeflag == '\0');
+        if (is_regular) {
+            if (seen == index) {
+                uint64_t i = 0;
+                for (; i < name_max - 1 && hdr->name[i]; i++) {
+                    name_out[i] = hdr->name[i];
+                }
+                name_out[i] = '\0';
+                *out_size = size;
+                return 0;
+            }
+            seen++;
+        }
+        uint64_t data_blocks = (size + USTAR_BLOCK - 1) / USTAR_BLOCK;
+        off += data_blocks * USTAR_BLOCK;
+    }
+    return -1;
+}

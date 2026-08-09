@@ -142,6 +142,7 @@ void kmain(void) {
     ramfs_init();
     procfs_init();
     sysfs_init();
+    bootfs_init();
     bench_init();
     abitest_init(untyped_base, UNTYPED_REGION_SIZE);
     argvtest_init();

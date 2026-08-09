@@ -87,6 +87,22 @@ tid_t sysfs_init(void) {
     return sysfs->tid;
 }
 
+tid_t bootfs_init(void) {
+    const uint8_t *bootfs_elf_start, *bootfs_elf_end;
+    if (rootfs_lookup("bootfs", &bootfs_elf_start, &bootfs_elf_end) != 0) {
+        kprintf("[boot] FATAL: rootfs has no entry named 'bootfs'\n");
+        for (;;) { asm volatile("cli; hlt"); }
+    }
+    tcb_t *bootfs = elf_load_and_spawn("bootfs", bootfs_elf_start, bootfs_elf_end, 11, PAGER_TID);
+    if (!bootfs) {
+        kprintf("[boot] FATAL: bootfs server failed to load\n");
+        for (;;) { asm volatile("cli; hlt"); }
+    }
+    kinfo_mount_add("/boot/", bootfs->tid);
+    kprintf("[boot] bootfs server: tid=%u\n", bootfs->tid);
+    return bootfs->tid;
+}
+
 void bench_init(void) {
     if (!cmdline_get("bench")) {
         return;
