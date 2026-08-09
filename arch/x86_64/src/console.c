@@ -69,16 +69,16 @@ static void vga_clear(void) {
 
 static void apply_ansi_color(int code) {
     switch (code) {
-    case 0:  vga_attr = 0x07; break; /* Reset */
-    case 1:  vga_attr |= 0x08; break; /* Bold/Bright */
-    case 30: vga_attr = (vga_attr & 0xF0) | 0x00; break; /* Black */
-    case 31: vga_attr = (vga_attr & 0xF0) | 0x0C; break; /* Red */
-    case 32: vga_attr = (vga_attr & 0xF0) | 0x0A; break; /* Green */
-    case 33: vga_attr = (vga_attr & 0xF0) | 0x0E; break; /* Yellow */
-    case 34: vga_attr = (vga_attr & 0xF0) | 0x09; break; /* Blue */
-    case 35: vga_attr = (vga_attr & 0xF0) | 0x0D; break; /* Magenta */
-    case 36: vga_attr = (vga_attr & 0xF0) | 0x0B; break; /* Cyan */
-    case 37: vga_attr = (vga_attr & 0xF0) | 0x0F; break; /* White */
+    case 0:  vga_attr = 0x07; break;
+    case 1:  vga_attr |= 0x08; break;
+    case 30: vga_attr = (vga_attr & 0xF0) | 0x00; break;
+    case 31: vga_attr = (vga_attr & 0xF0) | 0x0C; break;
+    case 32: vga_attr = (vga_attr & 0xF0) | 0x0A; break;
+    case 33: vga_attr = (vga_attr & 0xF0) | 0x0E; break;
+    case 34: vga_attr = (vga_attr & 0xF0) | 0x09; break;
+    case 35: vga_attr = (vga_attr & 0xF0) | 0x0D; break;
+    case 36: vga_attr = (vga_attr & 0xF0) | 0x0B; break;
+    case 37: vga_attr = (vga_attr & 0xF0) | 0x0F; break;
     default: break;
     }
 }
@@ -165,7 +165,7 @@ static int line_len;
 static void ring_push_locked(char c) {
     uint32_t next = (ring_head + 1) % CONSOLE_RING_SIZE;
     if (next == ring_tail) {
-        return;/
+        return;
     }
     console_ring[ring_head] = c;
     ring_head = next;
