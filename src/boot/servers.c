@@ -103,6 +103,27 @@ tid_t bootfs_init(void) {
     return bootfs->tid;
 }
 
+tid_t diskfs_init(void) {
+    const uint8_t *diskfs_elf_start, *diskfs_elf_end;
+    if (rootfs_lookup("diskfs", &diskfs_elf_start, &diskfs_elf_end) != 0) {
+        kprintf("[boot] FATAL: rootfs has no entry named 'diskfs'\n");
+        for (;;) { asm volatile("cli; hlt"); }
+    }
+    tcb_t *diskfs = elf_load_and_spawn("diskfs", diskfs_elf_start, diskfs_elf_end, 11, PAGER_TID);
+    if (!diskfs) {
+        kprintf("[boot] FATAL: diskfs server failed to load\n");
+        for (;;) { asm volatile("cli; hlt"); }
+    }
+    // Sole authorized IPC_FLAG_BLK_IO caller (src/core/ipc.c) -- granted
+    // before the mount is registered so diskfs's own boot-time mkfs
+    // check (diskfs_boot() in apps/diskfs/diskfs.c) is never racing
+    // against a caller that could reach /mnt/disk0/ before it's ready.
+    ipc_grant_blk_owner(diskfs->tid);
+    kinfo_mount_add("/mnt/disk0/", diskfs->tid);
+    kprintf("[boot] diskfs server: tid=%u\n", diskfs->tid);
+    return diskfs->tid;
+}
+
 void bench_init(void) {
     if (!cmdline_get("bench")) {
         return;

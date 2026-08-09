@@ -230,25 +230,38 @@ void panic_test_init(void) {
 
 static uint8_t stack_test_exit[STACK_SIZE] __attribute__((aligned(16)));
 static int test_exit_code;
+static int test_exit_delay_secs = 3;
 static void test_exit_entry(void) {
-    ipc_sleep(SCHED_HZ * 3);
+    ipc_sleep((uint64_t)(SCHED_HZ * test_exit_delay_secs));
     kprintf("[boot] exiting with code %d\n", test_exit_code);
     arch_test_exit(test_exit_code);
+}
+static int parse_uint(const char *val) {
+    int v = 0;
+    while (*val >= '0' && *val <= '9') {
+        v = v * 10 + (*val - '0');
+        val++;
+    }
+    return v;
 }
 void test_exit_init(void) {
     const char *val = cmdline_get("test_exit");
     if (!val) {
         return;
     }
-    int code = 0;
-    while (*val >= '0' && *val <= '9') {
-        code = code * 10 + (*val - '0');
-        val++;
-    }
+    int code = parse_uint(val);
     if (code > 255) {
         code = 255;
     }
     test_exit_code = code;
+    // Default 3s matches the original fixed delay; a longer-running
+    // scripted test (e.g. scripts/diskfs-persist-test.sh, which needs the
+    // shell to actually come up and finish a disk write before this fires)
+    // can override it with test_exit_delay=<seconds>.
+    const char *delay_val = cmdline_get("test_exit_delay");
+    if (delay_val) {
+        test_exit_delay_secs = parse_uint(delay_val);
+    }
     thread_create("test-exit", test_exit_entry, stack_test_exit + STACK_SIZE, 9);
 }
 
