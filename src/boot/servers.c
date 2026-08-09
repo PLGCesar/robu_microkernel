@@ -74,6 +74,7 @@ tid_t sysfs_init(void) {
         for (;;) { asm volatile("cli; hlt"); }
     }
     kinfo_set_sysfs_tid(sysfs->tid);
+    kinfo_mount_add("/var/sys/", sysfs->tid);
     kprintf("[boot] sysfs server: tid=%u\n", sysfs->tid);
     return sysfs->tid;
 }
