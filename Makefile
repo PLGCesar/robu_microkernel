@@ -127,13 +127,22 @@ MLIBC_BUILD_DIR := $(BUILD_DIR)/mlibc
 MLIBC_SYSROOT := $(abspath $(BUILD_DIR)/mlibc-sysroot)
 MLIBC_CROSS := apps/mlibc-robu-cross.ini
 
+# apps/mlibc-robu-cross.ini's [binaries] section uses bare tool names
+# (clang, llvm-ar, ...) so the same cross-file works unmodified on Linux
+# CI, where those are already on PATH. On macOS they aren't -- Apple's own
+# /usr/bin/clang would otherwise shadow the real LLVM toolchain this
+# project needs, and llvm-ar/llvm-strip aren't on PATH at all by default --
+# so Homebrew's LLVM bin dir is prepended here, for this build step only.
+# Harmless no-op on Linux/anywhere that path doesn't exist.
+MLIBC_TOOLCHAIN_PATH := /opt/homebrew/opt/llvm/bin:$(PATH)
+
 mlibc:
 	@if [ ! -f $(MLIBC_BUILD_DIR)/build.ninja ]; then \
-	    meson setup $(MLIBC_BUILD_DIR) $(MLIBC_DIR) --cross-file $(MLIBC_CROSS) \
+	    PATH="$(MLIBC_TOOLCHAIN_PATH)" meson setup $(MLIBC_BUILD_DIR) $(MLIBC_DIR) --cross-file $(MLIBC_CROSS) \
 	        -Dlibgcc_dependency=false -Ddefault_library=static --prefix=/usr; \
 	fi
-	ninja -C $(MLIBC_BUILD_DIR)
-	DESTDIR=$(MLIBC_SYSROOT) ninja -C $(MLIBC_BUILD_DIR) install
+	PATH="$(MLIBC_TOOLCHAIN_PATH)" ninja -C $(MLIBC_BUILD_DIR)
+	DESTDIR=$(MLIBC_SYSROOT) PATH="$(MLIBC_TOOLCHAIN_PATH)" ninja -C $(MLIBC_BUILD_DIR) install
 
 MLIBC_APP_CFLAGS := --target=x86_64-linux-gnu -ffreestanding -fPIC -fno-stack-protector \
                      -mno-red-zone -D_GNU_SOURCE -Wall -Wextra \
