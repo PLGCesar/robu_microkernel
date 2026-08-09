@@ -114,6 +114,14 @@ $(APPS_BUILD_DIR)/diskfs/diskfs: $(APPS_BUILD_DIR)/diskfs/diskfs.c.o $(APP_COMMO
 	$(LD) $(APP_LDFLAGS) -T apps/link/diskfs.ld -e _start -o $@ \
 	    $(APPS_BUILD_DIR)/diskfs/diskfs.c.o $(APP_COMMON_OBJ)
 
+$(APPS_BUILD_DIR)/pager/pager.c.o: apps/pager/pager.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(APPS_BUILD_DIR)/pager/pager: $(APPS_BUILD_DIR)/pager/pager.c.o $(APP_COMMON_OBJ) apps/link/pager.ld
+	$(LD) $(APP_LDFLAGS) -T apps/link/pager.ld -e _start -o $@ \
+	    $(APPS_BUILD_DIR)/pager/pager.c.o $(APP_COMMON_OBJ)
+
 MLIBC_DIR := apps/mlibc
 MLIBC_BUILD_DIR := $(BUILD_DIR)/mlibc
 MLIBC_SYSROOT := $(abspath $(BUILD_DIR)/mlibc-sysroot)
@@ -228,6 +236,7 @@ ROOTFS_STUB_NAMES := root_task file find mv
 $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/ramfs \
                          $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
                          $(APPS_BUILD_DIR)/bootfs/bootfs $(APPS_BUILD_DIR)/diskfs/diskfs \
+                         $(APPS_BUILD_DIR)/pager/pager \
                          $(APPS_BUILD_DIR)/hello_initsys/hello_initsys \
                          $(APPS_BUILD_DIR)/minibox/minibox \
                          $(APPS_BUILD_DIR)/sh/sh \
@@ -241,6 +250,7 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
 	cp $(APPS_BUILD_DIR)/sysfs/sysfs $(ROOTFS_STAGE)/sysfs
 	cp $(APPS_BUILD_DIR)/bootfs/bootfs $(ROOTFS_STAGE)/bootfs
 	cp $(APPS_BUILD_DIR)/diskfs/diskfs $(ROOTFS_STAGE)/diskfs
+	cp $(APPS_BUILD_DIR)/pager/pager $(ROOTFS_STAGE)/pager
 	cp $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(ROOTFS_STAGE)/hello_initsys
 	cp apps/hello_initsys/rc.conf $(ROOTFS_STAGE)/rc.conf
 	cp $(APPS_BUILD_DIR)/minibox/minibox $(ROOTFS_STAGE)/minibox

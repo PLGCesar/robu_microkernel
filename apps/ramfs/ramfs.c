@@ -1,8 +1,18 @@
 #include "robu/types.h"
 #include "robu/uipc.h"
 #include "robu/vfs.h"
-#define RAMFS_MAX_FILES 24
+// Entry-count capacity (dirs/symlinks/files) is decoupled from data-storage
+// capacity below -- symlinks and directories carry no file content, so
+// giving every one of RAMFS_MAX_FILES slots its own RAMFS_MAX_DATA buffer
+// (the pre-symlink layout) would waste huge amounts of memory for no
+// reason. It's not just nominal waste, either: arch/elf_load's segment
+// mapper (src/core/elf.c) eagerly pmm_alloc()s every page up to p_memsz at
+// spawn time (this kernel has no lazy BSS paging), so a naively large
+// files[] array directly costs that much real, immediately-committed RAM.
+#define RAMFS_MAX_FILES 96
+#define RAMFS_MAX_BIG_FILES 24
 #define RAMFS_MAX_HANDLES 32
+#define RAMFS_SYMLINK_MAX_DEPTH 8
 // mlibc-linked binaries statically link the whole of libc.a/libm.a, so they
 // land well over the old 144 KiB apps/libc-era cap -- 747 KiB for the
 // smallest one seen so far (sh).
@@ -10,10 +20,12 @@
 typedef struct {
     int in_use;
     int is_dir;
+    int is_symlink;
+    int data_slot;   /* -1 for dirs/symlinks; index into big_data[] for files */
     uint64_t parent_ino;
     char name[VFS_PATH_MAX];
+    char target[VFS_PATH_MAX];  /* only meaningful when is_symlink */
     uint64_t size;
-    uint8_t data[RAMFS_MAX_DATA];
 } ramfs_file_t;
 typedef struct {
     int in_use;
@@ -22,6 +34,22 @@ typedef struct {
 } ramfs_handle_t;
 static ramfs_file_t files[RAMFS_MAX_FILES];
 static ramfs_handle_t handles[RAMFS_MAX_HANDLES];
+static uint8_t big_data[RAMFS_MAX_BIG_FILES][RAMFS_MAX_DATA];
+static int big_data_in_use[RAMFS_MAX_BIG_FILES];
+static int alloc_data_slot(void) {
+    for (int i = 0; i < RAMFS_MAX_BIG_FILES; i++) {
+        if (!big_data_in_use[i]) {
+            big_data_in_use[i] = 1;
+            return i;
+        }
+    }
+    return -1;
+}
+static void free_data_slot(int slot) {
+    if (slot >= 0) {
+        big_data_in_use[slot] = 0;
+    }
+}
 static int name_eq(const char *a, const char *b) {
     for (int i = 0; i < VFS_PATH_MAX; i++) {
         if (a[i] != b[i]) {
@@ -45,6 +73,26 @@ static int find_file(const char *name) {
         if (files[i].in_use && name_eq(files[i].name, name)) {
             return i;
         }
+    }
+    return -1;
+}
+// Follows a chain of symlinks (each entry's `target` re-resolved via
+// find_file) down to the final non-symlink entry. Returns -1 for a
+// dangling target or a chain longer than RAMFS_SYMLINK_MAX_DEPTH (treated
+// as a loop). Callers that must act on the link itself, not its target --
+// handle_rename/handle_unlink -- use find_file() directly instead.
+static int resolve_path(const char *name) {
+    char cur[VFS_PATH_MAX];
+    set_name(cur, name, sizeof(cur));
+    for (int hop = 0; hop < RAMFS_SYMLINK_MAX_DEPTH; hop++) {
+        int idx = find_file(cur);
+        if (idx < 0) {
+            return -1;
+        }
+        if (!files[idx].is_symlink) {
+            return idx;
+        }
+        set_name(cur, files[idx].target, sizeof(cur));
     }
     return -1;
 }
@@ -125,13 +173,15 @@ static void handle_open(msg_regs_t *m) {
         name[i] = req->name[i];
     }
     vfs_open_reply_t *reply = (vfs_open_reply_t *)m;
-    int fidx = find_file(name);
+    int raw_idx = find_file(name);
+    int fidx = (raw_idx >= 0 && files[raw_idx].is_symlink) ? resolve_path(name) : raw_idx;
     if (fidx >= 0 && files[fidx].is_dir) {
         reply->status = VFS_ERR_IS_DIR;
         return;
     }
     if (fidx < 0) {
-        if (!(flags & VFS_O_CREAT)) {
+        if (raw_idx >= 0 || !(flags & VFS_O_CREAT)) {
+            // raw_idx >= 0 here means a symlink whose target is missing/looped.
             reply->status = VFS_ERR_NOT_FOUND;
             return;
         }
@@ -140,8 +190,15 @@ static void handle_open(msg_regs_t *m) {
             reply->status = VFS_ERR_NO_SPACE;
             return;
         }
+        int slot = alloc_data_slot();
+        if (slot < 0) {
+            reply->status = VFS_ERR_NO_SPACE;
+            return;
+        }
         files[fidx].in_use = 1;
         files[fidx].is_dir = 0;
+        files[fidx].is_symlink = 0;
+        files[fidx].data_slot = slot;
         files[fidx].size = 0;
         set_name(files[fidx].name, name, sizeof(files[fidx].name));
         files[fidx].parent_ino = resolve_parent_ino(name);
@@ -170,10 +227,11 @@ static void handle_read(msg_regs_t *m) {
     }
     ramfs_handle_t *hd = &handles[h];
     ramfs_file_t *f = &files[hd->file_idx];
+    uint8_t *data = big_data[f->data_slot];
     uint64_t avail = f->size > hd->offset ? f->size - hd->offset : 0;
     uint64_t n = len < avail ? len : avail;
     for (uint64_t i = 0; i < n; i++) {
-        reply->data[i] = f->data[hd->offset + i];
+        reply->data[i] = data[hd->offset + i];
     }
     hd->offset += n;
     reply->status = (int64_t)n;
@@ -193,10 +251,11 @@ static void handle_write(msg_regs_t *m) {
     }
     ramfs_handle_t *hd = &handles[h];
     ramfs_file_t *f = &files[hd->file_idx];
+    uint8_t *buf = big_data[f->data_slot];
     uint64_t space = RAMFS_MAX_DATA > hd->offset ? RAMFS_MAX_DATA - hd->offset : 0;
     uint64_t n = len < space ? len : space;
     for (uint64_t i = 0; i < n; i++) {
-        f->data[hd->offset + i] = data[i];
+        buf[hd->offset + i] = data[i];
     }
     hd->offset += n;
     if (hd->offset > f->size) {
@@ -229,7 +288,8 @@ static void handle_stat(msg_regs_t *m) {
         reply->ino = VFS_ROOT_INO;
         return;
     }
-    int fidx = find_file(name);
+    int raw_idx = find_file(name);
+    int fidx = (raw_idx >= 0 && files[raw_idx].is_symlink) ? resolve_path(name) : raw_idx;
     if (fidx < 0) {
         reply->status = VFS_ERR_NOT_FOUND;
         return;
@@ -296,6 +356,7 @@ static void handle_rename(msg_regs_t *m) {
             return;
         }
         if (existing != fidx) {
+            free_data_slot(files[existing].data_slot);
             files[existing].in_use = 0;
         }
     }
@@ -319,7 +380,35 @@ static void handle_unlink(msg_regs_t *m) {
         reply->status = VFS_ERR_IS_DIR;
         return;
     }
+    free_data_slot(files[fidx].data_slot);
     files[fidx].in_use = 0;
+    reply->status = 0;
+}
+static void handle_symlink(msg_regs_t *m) {
+    char name[VFS_NAME_MAX], target[VFS_NAME_MAX];
+    const vfs_symlink_req_t *req = (const vfs_symlink_req_t *)m;
+    for (int i = 0; i < VFS_NAME_MAX; i++) {
+        name[i] = req->name[i];
+        target[i] = req->target[i];
+    }
+    vfs_symlink_reply_t *reply = (vfs_symlink_reply_t *)m;
+    if (find_file(name) >= 0) {
+        reply->status = VFS_ERR_NOT_SUPPORTED;
+        return;
+    }
+    int idx = alloc_file();
+    if (idx < 0) {
+        reply->status = VFS_ERR_NO_SPACE;
+        return;
+    }
+    files[idx].in_use = 1;
+    files[idx].is_dir = 0;
+    files[idx].is_symlink = 1;
+    files[idx].data_slot = -1;
+    files[idx].size = 0;
+    set_name(files[idx].name, name, sizeof(files[idx].name));
+    set_name(files[idx].target, target, sizeof(files[idx].target));
+    files[idx].parent_ino = resolve_parent_ino(name);
     reply->status = 0;
 }
 static uint64_t seed_dir(const char *name, uint64_t parent_ino) {
@@ -329,6 +418,8 @@ static uint64_t seed_dir(const char *name, uint64_t parent_ino) {
     }
     files[idx].in_use = 1;
     files[idx].is_dir = 1;
+    files[idx].is_symlink = 0;
+    files[idx].data_slot = -1;
     files[idx].parent_ino = parent_ino;
     files[idx].size = 0;
     set_name(files[idx].name, name, sizeof(files[idx].name));
@@ -341,6 +432,21 @@ static void seed_fixed_dirs(void) {
     if (var_ino) {
         seed_dir("var/tmp", var_ino);
     }
+    seed_dir("sbin", VFS_ROOT_INO);
+    uint64_t usr_ino = seed_dir("usr", VFS_ROOT_INO);
+    if (usr_ino) {
+        seed_dir("usr/bin", usr_ino);
+        seed_dir("usr/sbin", usr_ino);
+    }
+    // Cosmetic-only: devfs/procfs own these paths outright via the mount
+    // table's longest-prefix match (kinfo_resolve_mount(), "/dev/" and
+    // "/proc/" both beat ramfs's own "/" catch-all), so nothing under
+    // these ever actually reaches ramfs. They exist here purely so `ls /`
+    // lists them, matching real Unix mountpoint-is-a-real-empty-dir
+    // convention -- the same reason resolve_mount_for_dir() in
+    // sysdeps.cpp had to special-case bare "/dev"/"/proc" stat()s already.
+    seed_dir("dev", VFS_ROOT_INO);
+    seed_dir("proc", VFS_ROOT_INO);
 }
 void _start(void) {
     msg_regs_t m;
@@ -375,6 +481,9 @@ void _start(void) {
             break;
         case VFS_OP_UNLINK:
             handle_unlink(&m);
+            break;
+        case VFS_OP_SYMLINK:
+            handle_symlink(&m);
             break;
         default:
             ((vfs_open_reply_t *)&m)->status = VFS_ERR_NOT_FOUND;

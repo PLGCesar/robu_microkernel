@@ -25,6 +25,7 @@
 #define VFS_OP_READDIR 7
 #define VFS_OP_RENAME  8
 #define VFS_OP_UNLINK  9
+#define VFS_OP_SYMLINK 10
 #define VFS_ERR_NOT_FOUND     (-1)
 #define VFS_ERR_BAD_HANDLE    (-2)
 #define VFS_ERR_NOT_SUPPORTED (-3)
@@ -117,6 +118,15 @@ _Static_assert(sizeof(vfs_unlink_req_t) <= 48, "must fit one msg_regs_t");
 typedef struct {
     int64_t status;
 } vfs_unlink_reply_t;
+typedef struct {
+    uint64_t op;
+    char name[VFS_NAME_MAX];
+    char target[VFS_NAME_MAX];
+} vfs_symlink_req_t;
+_Static_assert(sizeof(vfs_symlink_req_t) == 48, "must fit one msg_regs_t");
+typedef struct {
+    int64_t status;
+} vfs_symlink_reply_t;
 // Registers the caller as the owner of `prefix` in the kernel-resident
 // mount table (kinfo_page_t.mounts[], include/robu/kinfo.h). Gated
 // kernel-side to boot-spawned servers only (see IPC_FLAG_MOUNT's handler in
@@ -289,6 +299,27 @@ static inline int64_t vfs_unlink(tid_t server, const char *name) {
     tid_t from;
     ipc_call(server, &m, &from);
     vfs_unlink_reply_t *reply = (vfs_unlink_reply_t *)&m;
+    return reply->status;
+}
+static inline int64_t vfs_symlink(tid_t server, const char *name, const char *target) {
+    msg_regs_t m;
+    vfs_symlink_req_t *req = (vfs_symlink_req_t *)&m;
+    req->op = VFS_OP_SYMLINK;
+    size_t i = 0;
+    while (name[i] && i < VFS_NAME_MAX - 1) {
+        req->name[i] = name[i];
+        i++;
+    }
+    req->name[i] = '\0';
+    i = 0;
+    while (target[i] && i < VFS_NAME_MAX - 1) {
+        req->target[i] = target[i];
+        i++;
+    }
+    req->target[i] = '\0';
+    tid_t from;
+    ipc_call(server, &m, &from);
+    vfs_symlink_reply_t *reply = (vfs_symlink_reply_t *)&m;
     return reply->status;
 }
 #endif

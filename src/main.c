@@ -32,33 +32,6 @@ static void console_in_entry(void) {
     }
 }
 
-static uint8_t stack_pager[STACK_SIZE] __attribute__((aligned(16)));
-static volatile uint64_t pager_faults_resolved;
-static void pager_entry(void) {
-    msg_regs_t m;
-    tid_t from;
-    int color_cursor = 0;
-    for (;;) {
-        ipc_recv(IPC_TID_ANY, &m, &from);
-        vaddr_t fault_addr = m.word[0];
-        tid_t faulter = (tid_t)m.word[2];
-        tcb_t *ft = sched_get_tcb(faulter);
-        if (!ft) {
-            continue;
-        }
-        vaddr_t page_va = fault_addr & ~(PAGE_SIZE_4K - 1);
-        int color = color_cursor++ & (PMM_NUM_COLORS - 1);
-        paddr_t frame = pmm_alloc(color);
-        arch_vm_map_page(ft->address_space, page_va, frame,
-                         VM_PROT_READ | VM_PROT_WRITE | VM_PROT_USER);
-        pager_faults_resolved++;
-        SAFE_PRINT("[pager] tid=%u '%s' faulted at 0x%lx rip=0x%lx -> frame 0x%lx "
-                   "(color %d), mapped and resumed (#%lu)\n",
-                   faulter, ft->name, fault_addr, ft->uctx.rip, frame, color, pager_faults_resolved);
-        ipc_send(faulter, NULL);
-    }
-}
-
 static uint8_t stack_monitor[STACK_SIZE] __attribute__((aligned(16)));
 static void monitor_entry(void) {
     msg_regs_t m;
@@ -177,7 +150,7 @@ void kmain(void) {
     smp_start_ap();
     sched_init();
 
-    thread_create("pager", pager_entry, stack_pager + STACK_SIZE, 18);
+    pager_init();
     thread_create("monitor", monitor_entry, stack_monitor + STACK_SIZE, 14);
     test_report_init();
     thread_create("console-in", console_in_entry, stack_console_in + STACK_SIZE, 20);
