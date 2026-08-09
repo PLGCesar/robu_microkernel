@@ -41,6 +41,7 @@ tid_t devfs_init(void);
 tid_t ramfs_init(void);
 tid_t procfs_init(void);
 tid_t sysfs_init(void);
+tid_t bootfs_init(void);
 void bench_init(void);
 
 void abitest_init(paddr_t untyped_base, uint64_t untyped_size);

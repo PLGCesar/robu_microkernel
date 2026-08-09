@@ -34,6 +34,10 @@ int rootfs_lookup(const char *name, const uint8_t **out_start, const uint8_t **o
     return 0;
 }
 
+int rootfs_readdir(uint64_t index, char *name_out, uint64_t name_max, uint64_t *out_size) {
+    return tar_iterate(rootfs_buf, rootfs_len, index, name_out, name_max, out_size);
+}
+
 void rootfs_init(void) {
     cmdline_parse(arch_boot_cmdline());
     paddr_t mod_base;

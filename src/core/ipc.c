@@ -8,6 +8,7 @@
 #include "robu/pipe.h"
 #include "robu/pmm.h"
 #include "robu/kinfo.h"
+#include "robu/rootfs.h"
 #include "robu/arch.h"
 static tid_t console_writer_tid = 0;
 void ipc_grant_console_writer(tid_t tid) {
@@ -311,6 +312,84 @@ void sys_ipc(void) {
             prefix[len] = '\0';
             int rc = kinfo_mount_add(prefix, (uint32_t)cur->tid);
             f->rax = (uint64_t)(rc == 0 ? IPC_ERR_NONE : IPC_ERR_NO_MEM);
+            return;
+        }
+        if (flags & IPC_FLAG_BOOTFS) {
+            // Read-only bridge into the kernel-resident rootfs_buf
+            // (src/boot/rootfs.c) for apps/bootfs/bootfs.c -- ring-3 has no
+            // direct access to that memory, so every op is a round-trip
+            // here. Ungated: this only exposes the same boot-module bytes
+            // every process's own executable was already loaded from.
+            uint64_t category = f->r8;
+            if (category == 0) {
+                // STAT: name packed into r9/r10/r12 (24 bytes).
+                uint64_t words[3] = { f->r9, f->r10, f->r12 };
+                char name[25];
+                memcpy(name, words, 24);
+                name[24] = '\0';
+                const uint8_t *start, *end;
+                if (rootfs_lookup(name, &start, &end) != 0) {
+                    f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+                    return;
+                }
+                f->rax = (uint64_t)IPC_ERR_NONE;
+                f->r8 = (uint64_t)(end - start);
+                return;
+            }
+            if (category == 1) {
+                // READDIR: index in r9; reply packs size into r8, name into
+                // r9/r10/r12.
+                uint64_t index = f->r9;
+                char name[25] = {0};
+                uint64_t size;
+                if (rootfs_readdir(index, name, sizeof(name), &size) != 0) {
+                    f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+                    return;
+                }
+                uint64_t words[3] = {0, 0, 0};
+                memcpy(words, name, 24);
+                f->rax = (uint64_t)IPC_ERR_NONE;
+                f->r8 = size;
+                f->r9 = words[0];
+                f->r10 = words[1];
+                f->r12 = words[2];
+                return;
+            }
+            if (category == 2) {
+                // READ: name in r9/r10/r12 (24 bytes), offset in r13, len
+                // in r14 (capped to 40 bytes, matching VFS_READ_MAX); reply
+                // returns the byte count in rax and the data across
+                // r8..r13.
+                uint64_t words[3] = { f->r9, f->r10, f->r12 };
+                char name[25];
+                memcpy(name, words, 24);
+                name[24] = '\0';
+                uint64_t offset = f->r13;
+                uint64_t len = f->r14;
+                if (len > 40) {
+                    len = 40;
+                }
+                const uint8_t *start, *end;
+                if (rootfs_lookup(name, &start, &end) != 0) {
+                    f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+                    return;
+                }
+                uint64_t size = (uint64_t)(end - start);
+                uint64_t avail = size > offset ? size - offset : 0;
+                uint64_t n = len < avail ? len : avail;
+                uint8_t buf[40] = {0};
+                memcpy(buf, start + offset, n);
+                uint64_t outwords[5];
+                memcpy(outwords, buf, 40);
+                f->rax = (uint64_t)n;
+                f->r8 = outwords[0];
+                f->r9 = outwords[1];
+                f->r10 = outwords[2];
+                f->r12 = outwords[3];
+                f->r13 = outwords[4];
+                return;
+            }
+            f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
             return;
         }
         if (flags & IPC_FLAG_SET_FSBASE) {
