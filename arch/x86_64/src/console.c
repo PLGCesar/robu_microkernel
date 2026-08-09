@@ -26,6 +26,48 @@ static int serial_getc(void) {
     return (int)(uint8_t)inb(COM1);
 }
 
+/* Driver de Teclado PS/2 (Porta 0x60 / 0x64) */
+static const char scancode_ascii[128] = {
+    0,  27, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', '\b',
+  '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
+    0,  'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`',
+    0, '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/',   0,
+  '*',   0, ' ',   0
+};
+
+static const char scancode_ascii_shift[128] = {
+    0,  27, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '\b',
+  '\t', 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n',
+    0,  'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~',
+    0, '|', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?',   0,
+  '*',   0, ' ',   0
+};
+
+static int shift_pressed = 0;
+
+static int ps2_getc(void) {
+    if (!(inb(0x64) & 0x01)) {
+        return -1;
+    }
+    uint8_t scancode = inb(0x60);
+    if (scancode == 0x2A || scancode == 0x36) {
+        shift_pressed = 1;
+        return -1;
+    }
+    if (scancode == 0xAA || scancode == 0xB6) {
+        shift_pressed = 0;
+        return -1;
+    }
+    if (scancode & 0x80) {
+        return -1;
+    }
+    if (scancode < 128) {
+        char c = shift_pressed ? scancode_ascii_shift[scancode] : scancode_ascii[scancode];
+        if (c) return (int)(uint8_t)c;
+    }
+    return -1;
+}
+
 #define VGA_COLS 80
 #define VGA_ROWS 25
 #define DEFAULT_ATTR 0x07
@@ -151,7 +193,9 @@ void arch_console_putc(char c) {
 }
 
 int arch_console_getc(void) {
-    return serial_getc();
+    int c = serial_getc();
+    if (c >= 0) return c;
+    return ps2_getc();
 }
 
 static spinlock_t console_ring_lock = SPINLOCK_INIT;
