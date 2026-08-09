@@ -58,6 +58,7 @@ tid_t procfs_init(void) {
         for (;;) { asm volatile("cli; hlt"); }
     }
     kinfo_set_procfs_tid(procfs->tid);
+    kinfo_mount_add("/proc/", procfs->tid);
     kprintf("[boot] procfs server: tid=%u\n", procfs->tid);
     return procfs->tid;
 }
