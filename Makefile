@@ -44,9 +44,9 @@ ASM_SRCS := $(wildcard $(ARCH_DIR)/src/*.S)
 
 OBJS := $(C_SRCS:%.c=$(BUILD_DIR)/%.c.o) $(ASM_SRCS:%.S=$(BUILD_DIR)/%.S.o)
 
-.PHONY: all clean mlibc minibox run mlibc-hello
+.PHONY: all clean mlibc minibox run mlibc-hello iso
 
-all: $(BUILD_DIR)/$(TARGET)
+all: $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/rootfs.tar
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -222,9 +222,6 @@ $(APPS_BUILD_DIR)/stub/stub: $(APPS_BUILD_DIR)/stub/stub.c.o apps/link/stub.ld
 	    $(APPS_BUILD_DIR)/stub/stub.c.o
 
 ROOTFS_STAGE := $(BUILD_DIR)/rootfs-stage
-# ls/cat/touch/tail/cp are real minibox applets; aliasing them to the minibox
-# binary (which dispatches on argv[0]) lets a direct `__libc_spawn("ls", ...)`
-# resolve to the real command instead of shadowing it behind a no-op stub.
 ROOTFS_MINIBOX_ALIASES := ls cat touch tail cp
 ROOTFS_STUB_NAMES := root_task file find mv
 
@@ -263,14 +260,32 @@ QEMU_APPEND ?= root=root_task starter=hello_initsys
 # does not remove it -- delete it by hand to force reformatting.
 QEMU_DISK ?= $(BUILD_DIR)/diskfs.img
 
-run: $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/rootfs.tar
+# grub-mkrescue isn't reliably available on macOS (it isn't on this dev
+# machine at all), so it runs inside a throwaway (--rm) Ubuntu container
+# instead of requiring host GRUB tooling. Native compilation -- clang/lld,
+# mlibc, every app build above -- stays entirely on the host; only this one
+# step, which needs grub-pc-bin/xorriso/mtools, is containerized.
+GRUB_DOCKER ?= docker
+GRUB_DOCKER_IMAGE ?= ubuntu:24.04
+
+$(BUILD_DIR)/robu_kernel.iso: $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/rootfs.tar iso/boot/grub/grub.cfg.in
+	@mkdir -p $(BUILD_DIR)/iso_root/boot/grub
+	cp $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/iso_root/boot/robu_kernel
+	cp $(BUILD_DIR)/rootfs.tar $(BUILD_DIR)/iso_root/boot/rootfs.tar
+	sed 's|@QEMU_APPEND@|$(QEMU_APPEND)|' iso/boot/grub/grub.cfg.in \
+	    > $(BUILD_DIR)/iso_root/boot/grub/grub.cfg
+	$(GRUB_DOCKER) run --rm --platform=linux/amd64 -v $(abspath $(BUILD_DIR)):/build $(GRUB_DOCKER_IMAGE) \
+	    bash -c "apt-get update -qq && apt-get install -y -qq grub-pc-bin grub-common xorriso mtools >/dev/null 2>&1 && grub-mkrescue -o /build/robu_kernel.iso /build/iso_root"
+
+iso: $(BUILD_DIR)/robu_kernel.iso
+
+run: $(BUILD_DIR)/robu_kernel.iso
 	@test -f $(QEMU_DISK) || truncate -s 16M $(QEMU_DISK)
-	$(QEMU) -kernel $(BUILD_DIR)/$(TARGET) -initrd $(BUILD_DIR)/rootfs.tar \
-	    -append "$(QEMU_APPEND)" -smp $(QEMU_SMP) -m $(QEMU_MEM) \
+	$(QEMU) -cdrom $(BUILD_DIR)/robu_kernel.iso \
+	    -smp $(QEMU_SMP) -m $(QEMU_MEM) \
 	    -nographic -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
 	    -drive file=$(QEMU_DISK),format=raw,if=none,id=blk0 \
 	    -device virtio-blk-pci,drive=blk0
 
 APP_BINS := $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
             $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(APPS_BUILD_DIR)/minibox/minibox \
-

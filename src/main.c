@@ -68,10 +68,8 @@ static void monitor_entry(void) {
         ipc_recv(IPC_TID_ANY, &m, &from);
         total++;
         if (total % 25 == 0) {
-            SAFE_PRINT("[monitor] ring-3 tid=%u ping #%lu addr=0x%lx "
-                       "kinfo(ver=%lu.%lu tick=%lu) (%lu pings received total)\n",
-                       from, m.word[0], m.word[1],
-                       m.word[2] >> 16, m.word[2] & 0xFFFF, m.word[3], total);
+            SAFE_PRINT("\033[36m[monitor]\033[0m ring3 tid=%u ping #%lu addr=0x%lx kinfo tick=%lu\n",
+                       from, m.word[0], m.word[1], m.word[3]);
         }
     }
 }
@@ -160,11 +158,7 @@ void kmain(void) {
     kprintf("[boot] untyped region: %lu bytes at 0x%lx\n", (uint64_t)UNTYPED_REGION_SIZE, untyped_base);
     kprintf("[boot] frames: total=%lu free=%lu\n",
             pmm_stats.total_frames, pmm_stats.free_frames);
-    SAFE_PRINT("[boot] alloc_calls=%lu free_calls=%lu\n",
-               pmm_stats.alloc_calls, pmm_stats.free_calls);
-    for (int c = 0; c < PMM_NUM_COLORS; c++) {
-        SAFE_PRINT("[boot]   color[%d] free=%lu\n", c, pmm_stats.free_by_color[c]);
-    }
+
     arch_gdt_init();
     arch_intr_init();
     vm_init();
@@ -179,7 +173,7 @@ void kmain(void) {
     kinfo_init(lapic_id(), 2);
     extern uint8_t kstack_top[];
     percpu_init_this_cpu(0, lapic_id(), kstack_top);
-    kprintf("[smp] BSP cpu_id=0 apic_id=%u\n", lapic_id());
+    kprintf("\033[33m[smp]\033[0m BSP cpu_id=0 apic_id=%u\n", lapic_id());
     smp_start_ap();
     sched_init();
 

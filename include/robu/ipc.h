@@ -35,6 +35,10 @@
 #define IPC_FLAG_MOUNT (1 << 28)
 #define IPC_FLAG_BOOTFS (1 << 29)
 #define IPC_FLAG_BLK_IO (1 << 30)
+// Bit 31 is the last one free in this 32-bit flags word. Reboot (merged in
+// from a fork) rides in as IPC_FLAG_SYS_INFO's category 2 instead of a new
+// bit, matching the r8-encoded sub-op pattern IPC_FLAG_SYS_INFO/
+// IPC_FLAG_BLK_IO already use for exactly this situation.
 #define IPC_ERR_NONE       0
 #define IPC_ERR_NOT_FOUND -1
 #define IPC_ERR_TIMEOUT   -2
