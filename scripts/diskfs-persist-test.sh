@@ -1,20 +1,5 @@
 #!/bin/sh
-# Two-boot proof that apps/diskfs/diskfs.c actually persists data to real
-# storage, not just within a single boot's in-memory file-table cache:
-# boot once against a fresh disk image, create a file via the shell,
-# cleanly shut the VM down (test_exit=, which drives arch_test_exit() ->
-# isa-debug-exit -> a real process exit, so the block layer flushes
-# normally -- unlike SIGKILL/pkill, which this script deliberately avoids),
-# then boot again against the SAME image file and confirm the file is
-# still there. `make run` boots via a GRUB/Multiboot2 ISO (built through a
-# throwaway Docker container) rather than a direct -kernel/-initrd boot,
-# and shell startup under it is noticeably slower (PS/2 + ANSI VGA driver
-# init adds real page-fault volume) -- timings below are generous for that.
-#
-# Uses `touch` + `ls`, not `echo ... > file` -- minibox-shell's own `>`
-# redirection was unreliable to drive non-interactively during this same
-# investigation (a pre-existing shell quirk, unrelated to diskfs), while
-# `touch`/`ls` round-tripped reliably every time.
+
 set -e
 cd "$(dirname "$0")/.."
 
@@ -25,14 +10,6 @@ trap 'rm -f "$IMG" "$LOG1" "$LOG2"' EXIT
 
 truncate -s 16M "$IMG"
 
-# `make run` now boots via a GRUB ISO built through a throwaway Docker
-# container (see Makefile) instead of a direct -kernel/-initrd boot -- a
-# fixed pre-command sleep can no longer distinguish "still building" from
-# "still booting", and the two take wildly different amounts of time (the
-# ISO step alone can take anywhere from ~0s, if already up to date, to
-# ~1 minute on a cold Docker pull). Building first, untimed, means the
-# piped `make run` below only ever has to wait out actual boot + shell
-# startup, which is comparatively predictable.
 make build/robu_kernel.iso > /dev/null 2>&1
 
 echo "=== boot 1: creating /mnt/disk0/persist.txt ==="

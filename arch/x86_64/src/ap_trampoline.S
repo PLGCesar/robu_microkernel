@@ -18,15 +18,15 @@ ap_trampoline_start:
 
     mov %cr0, %eax
     or $1, %eax
-    mov %eax, %cr0          /* PE=1: protected mode, still fetching 16-bit code */
+    mov %eax, %cr0
 
     ljmpl $0x08, $(AP_TRAMPOLINE_PADDR + (ap32_start - ap_trampoline_start))
 
 .align 8
 ap16_gdt:
     .quad 0
-    .quad 0x00CF9A000000FFFF   /* 32-bit flat code, base=0 limit=4G */
-    .quad 0x00CF92000000FFFF   /* 32-bit flat data, base=0 limit=4G */
+    .quad 0x00CF9A000000FFFF
+    .quad 0x00CF92000000FFFF
 ap16_gdt_end:
 ap16_gdt_ptr:
     .word ap16_gdt_end - ap16_gdt - 1
@@ -41,24 +41,24 @@ ap32_start:
 
     mov %cr4, %eax
     or $((1 << 5) | (1 << 9) | (1 << 10)), %eax
-    mov %eax, %cr4           /* PAE | OSFXSR | OSXMMEXCPT */
+    mov %eax, %cr4
 
     .extern boot_pml4
-    mov $boot_pml4, %eax     /* same tables the BSP already fully built */
+    mov $boot_pml4, %eax
     mov %eax, %cr3
 
     mov $0xC0000080, %ecx
     rdmsr
     or $((1 << 8) | (1 << 11)), %eax
-    wrmsr                    /* EFER.LME | EFER.NXE */
+    wrmsr
 
     mov %cr0, %eax
-    and $~(1 << 2), %eax     /* EM=0: SSE/x87 execute instead of trapping */
-    or $(0x80000000 | (1 << 1)), %eax  /* PG=1, MP=1 */
-    mov %eax, %cr0           /* paging on */
+    and $~(1 << 2), %eax
+    or $(0x80000000 | (1 << 1)), %eax
+    mov %eax, %cr0
 
     .extern kernel_gdt_ptr
-    lgdt kernel_gdt_ptr      /* the kernel's real GDT, not this trampoline's temp one */
+    lgdt kernel_gdt_ptr
     ljmp $0x08, $ap64_start
 
 .code64

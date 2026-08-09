@@ -255,10 +255,7 @@ void test_exit_init(void) {
         code = 255;
     }
     test_exit_code = code;
-    // Default 3s matches the original fixed delay; a longer-running
-    // scripted test (e.g. scripts/diskfs-persist-test.sh, which needs the
-    // shell to actually come up and finish a disk write before this fires)
-    // can override it with test_exit_delay=<seconds>.
+
     const char *delay_val = cmdline_get("test_exit_delay");
     if (delay_val) {
         test_exit_delay_secs = parse_uint(delay_val);

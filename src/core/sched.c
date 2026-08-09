@@ -256,12 +256,7 @@ void sched_resume(void) {
         sched_arm_next_deadline();
     }
     tcb_t *next = current_thread;
-    /* Kernel code never touches SSE/x87, so the FPU register file only
-     * ever needs to move when we're actually switching to a different
-     * thread -- and that switch must be atomic with respect to the rest
-     * of the scheduler's view of `prev`/`next`, so do it before releasing
-     * sched_lock rather than after (a cross-core race window there was
-     * the root cause of an earlier, hard-to-reproduce corruption bug). */
+
     if (next != prev) {
         arch_fpu_save(prev->fpu_state);
         arch_fpu_restore(next->fpu_state);
@@ -455,10 +450,7 @@ tcb_t *thread_create_forked_locked(const char *name, paddr_t address_space, tid_
         t->address_space = address_space;
         t->pager_tid = pager_tid;
         t->uctx = parent->uctx;
-        // fs_base/fpu_state are separate tcb_t fields, not part of uctx --
-        // copy them too, or the child inherits a default/reset FPU image
-        // and (far more seriously) fs_base=0, breaking every %fs-relative
-        // TLS access (including mlibc's own errno) the instant it runs.
+
         t->fs_base = parent->fs_base;
         memcpy(t->fpu_state, parent->fpu_state, sizeof(t->fpu_state));
         sched_ready_now(t);

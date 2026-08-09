@@ -33,10 +33,7 @@ void pmm_init(paddr_t base, uint64_t len, paddr_t reserve_base, uint64_t reserve
     paddr_t reserve_end = reserve_base + reserve_len;
     uint64_t count = 0;
     for (paddr_t f = floor; f < ceiling; f += PAGE_SIZE_4K) {
-        // Skips whatever range the caller flags as still holding live data
-        // (the not-yet-copied boot module, in kmain()'s case) -- pmm_free()
-        // writes its free-list next-pointer directly into the frame itself,
-        // so freeing a frame that's still in use silently corrupts it.
+
         if (reserve_len && f + PAGE_SIZE_4K > reserve_base && f < reserve_end) {
             continue;
         }

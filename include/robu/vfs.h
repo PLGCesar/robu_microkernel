@@ -3,19 +3,7 @@
 #include "robu/types.h"
 #include "robu/uipc.h"
 #include "robu/kinfo.h"
-// A single generic filesystem-server protocol, formalizing what
-// include/robu/ramfs.h (the richest of the four original bespoke
-// protocols) already established -- every op/error code number below is
-// unchanged from ramfs.h on purpose, so ramfs's own migration is a pure
-// rename. devfs/procfs/sysfs implement a subset (no real directories, no
-// write for procfs/sysfs) and answer VFS_ERR_NOT_SUPPORTED for the rest --
-// this mirrors how ramfs.h's own RAMFS_ERR_NOT_SUPPORTED was already used.
-//
-// Unlike ramfs.h's client wrappers (which hardcode ramfs_server_tid()),
-// every wrapper here takes an explicit `tid_t server` -- the whole point of
-// the mount table (include/robu/kinfo.h's kinfo_resolve_mount()) is that
-// which server owns a given path is resolved dynamically at the call site,
-// not fixed per protocol.
+
 #define VFS_OP_OPEN    1
 #define VFS_OP_READ    2
 #define VFS_OP_WRITE   3
@@ -127,11 +115,7 @@ _Static_assert(sizeof(vfs_symlink_req_t) == 48, "must fit one msg_regs_t");
 typedef struct {
     int64_t status;
 } vfs_symlink_reply_t;
-// Registers the caller as the owner of `prefix` in the kernel-resident
-// mount table (kinfo_page_t.mounts[], include/robu/kinfo.h). Gated
-// kernel-side to boot-spawned servers only (see IPC_FLAG_MOUNT's handler in
-// src/core/ipc.c) -- a server calls this once, early in its own _start(),
-// the same way it currently might report its own tid.
+
 static inline int64_t vfs_mount(const char *prefix) {
     msg_regs_t m = (msg_regs_t){0};
     uint64_t len = 0;

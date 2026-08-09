@@ -76,9 +76,7 @@ static int append_int(char *buf, int pos, int max, int64_t v) {
     }
     return append_uint(buf, pos, max, (uint64_t)v);
 }
-// Shared by OPEN (persists into a real handle slot) and STAT (ephemeral,
-// discarded after reporting size) -- both need the same "<tid>/status"
-// content for a given tid.
+
 static int fill_content(uint32_t tid, procfs_handle_t *hd) {
     msg_regs_t q = (msg_regs_t){0};
     q.word[0] = tid;
@@ -193,9 +191,7 @@ static void handle_stat(msg_regs_t *m) {
     }
     vfs_stat_reply_t *reply = (vfs_stat_reply_t *)m;
     if (path[0] == '\0') {
-        // The mount's own root (see resolve_mount_for_dir() in
-        // sysdeps.cpp): procfs has no real directories, so this is the
-        // only directory it ever reports.
+
         reply->status = 0;
         reply->size = 0;
         reply->is_dir = 1;
@@ -230,10 +226,7 @@ static void handle_fstat(msg_regs_t *m) {
     reply->is_dir = 0;
     reply->ino = h + 1;
 }
-// Mirrors SCHED_MAX_THREADS (include/robu/sched.h) -- there's no
-// ring-3-visible "enumerate all tids" verb, so listing /proc probes every
-// possible tid via the same per-tid IPC_FLAG_THREAD_INFO query
-// fill_content() already uses for individual lookups.
+
 #define PROCFS_MAX_SCAN_TID 64
 static void handle_readdir(msg_regs_t *m) {
     const vfs_readdir_req_t *req = (const vfs_readdir_req_t *)m;

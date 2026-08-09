@@ -156,14 +156,7 @@ void arch_detect_memory(paddr_t *out_base, uint64_t *out_len) {
                 uint64_t best_len = 0;
                 for (uint32_t i = 0; i < nentries; i++) {
                     struct mb2_mmap_entry *e = (struct mb2_mmap_entry *)((uint8_t *)mmap->entries + i * mmap->entry_size);
-                    // No address floor here (unlike an earlier version of
-                    // this loop): the real usable region GRUB/QEMU report
-                    // starts at 1 MiB (0x100000), not 16 MiB -- requiring
-                    // e->addr >= 0x1000000 rejected it outright and silently
-                    // fell through to the 16 MiB fallback window below,
-                    // nowhere near enough for this kernel's actual needs
-                    // (ramfs alone eager-maps a 48 MiB BSS at spawn). Matches
-                    // the PVH path's own floor-free logic just below.
+
                     if (e->type == 1 && e->len > best_len) {
                         best_base = (paddr_t)e->addr;
                         best_len = e->len;

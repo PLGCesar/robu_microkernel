@@ -22,12 +22,7 @@ void arch_uctx_init_user(arch_uctx_t *u, vaddr_t entry, vaddr_t user_stack_top) 
     u->rip = entry;
     u->cs = GDT_SEL_UCODE_RPL3;
     u->ss = GDT_SEL_UDATA_RPL3;
-    // _start is entered via iretq, not a call -- there's no implicit return
-    // address on the stack, so the SysV ABI requires rsp to be exactly
-    // 16-byte aligned here (not the usual "aligned - 8" a function sees when
-    // entered via call). Getting this wrong is invisible until something
-    // executes an alignment-strict SSE stack access (e.g. movaps) that trusts
-    // the ABI guarantee, which is exactly what mlibc's vfprintf does.
+
     u->rsp = user_stack_top & ~0xFULL;
     u->rflags = 0x202;
 }
@@ -88,9 +83,7 @@ void trap_dispatch(arch_uctx_t *frame) {
     if (frame->vector == TRAP_VEC_IPI_SHOOTDOWN) {
         arch_tlb_shootdown_handle_local();
         lapic_eoi();
-        /* Resuming the same thread that trapped in -- kernel code never
-         * touches SSE/x87, so the FPU register file is exactly as this
-         * thread left it. No save/restore needed. */
+
         arch_enter_thread_raw(&current_thread->uctx);
     }
     sched_lock_acquire();

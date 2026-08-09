@@ -154,9 +154,7 @@ static void handle_stat(msg_regs_t *m) {
     }
     vfs_stat_reply_t *reply = (vfs_stat_reply_t *)m;
     if (name[0] == '\0') {
-        // The mount's own root (see resolve_mount_for_dir() in
-        // sysdeps.cpp): bootfs is a flat namespace, so this is the only
-        // directory it ever reports.
+
         reply->status = 0;
         reply->size = 0;
         reply->is_dir = 1;

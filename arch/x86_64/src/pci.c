@@ -32,11 +32,7 @@ void pci_cfg_write16(pci_addr_t addr, uint8_t offset, uint16_t value) {
     uint32_t mask = 0xFFFFu << shift;
     pci_cfg_write32(addr, offset, (old & ~mask) | ((uint32_t)value << shift));
 }
-// Shared by pci_find_device()/pci_log_devices(): calls `cb` for every
-// present (bus, device, function), stopping early if `cb` returns nonzero.
-// A device is "present" if function 0's vendor id isn't the sentinel
-// 0xFFFF; only multifunction devices (header type bit 7) get functions
-// 1-7 probed at all.
+
 static int walk_devices(int (*cb)(pci_addr_t addr, uint16_t vendor, uint16_t device, void *ctx),
                          void *ctx) {
     for (int bus = 0; bus < 256; bus++) {
