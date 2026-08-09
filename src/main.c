@@ -11,6 +11,7 @@
 #include "lapic.h"
 #include "smp.h"
 #include "percpu.h"
+#include "pci.h"
 #include "boot.h"
 
 #define UNTYPED_REGION_SIZE (128u * 1024)
@@ -124,6 +125,14 @@ void kmain(void) {
     arch_intr_init();
     vm_init();
     lapic_init();
+    pci_log_devices();
+    pci_addr_t virtio_blk_addr;
+    if (pci_find_device(0x1af4, 0x1001, &virtio_blk_addr) == 0) {
+        kprintf("[pci] virtio-blk found at bus=%x dev=%x fn=%x\n",
+                virtio_blk_addr.bus, virtio_blk_addr.device, virtio_blk_addr.function);
+    } else {
+        kprintf("[pci] no virtio-blk device (vendor=1af4 device=1001) found\n");
+    }
     arch_timer_calibrate();
     arch_timer_percpu_init();
     kinfo_init(lapic_id(), 2);
