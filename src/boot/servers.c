@@ -42,6 +42,13 @@ tid_t ramfs_init(void) {
         for (;;) { asm volatile("cli; hlt"); }
     }
     kinfo_set_ramfs_tid(ramfs->tid);
+    // The catch-all mount: every path starts with "/", so this always
+    // matches (matched_len==1 from kinfo_resolve_mount()'s longest-prefix
+    // match), losing only to a more specific prefix like "/dev/". This also
+    // strips exactly the leading '/' before ramfs ever sees a name, matching
+    // its own bare-name convention (seed_fixed_dirs() in apps/ramfs/ramfs.c
+    // creates "bin"/"etc"/"var", not "/bin"/"/etc"/"/var").
+    kinfo_mount_add("/", ramfs->tid);
     kprintf("[boot] ramfs server: tid=%u\n", ramfs->tid);
     return ramfs->tid;
 }

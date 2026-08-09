@@ -6,9 +6,14 @@
 #include "robu/cmdline.h"
 #include "robu/tar.h"
 #include "robu/captable.h"
-#include "robu/ramfs.h"
+#include "robu/vfs.h"
+#include "robu/kinfo.h"
 #include "robu/rootfs.h"
 #include "../boot.h"
+
+static tid_t ramfs_tid(void) {
+    return (tid_t)kinfo_user()->ramfs_tid;
+}
 
 // mlibc-linked binaries are ~100x bigger than the old apps/libc ones (each
 // statically links libc.a/libm.a in full, no dynamic linking), so migrating
@@ -78,7 +83,7 @@ void ramfs_bin_seed_init(void) {
         }
         uint64_t sz = (uint64_t)(end - start);
 
-        char path[RAMFS_NAME_MAX];
+        char path[VFS_NAME_MAX];
         uint32_t p = 0;
         static const char prefix[] = "bin/";
         for (uint32_t j = 0; prefix[j] && p < sizeof(path) - 1; j++) {
@@ -89,26 +94,26 @@ void ramfs_bin_seed_init(void) {
         }
         path[p] = '\0';
 
-        int64_t h = ramfs_open(path, RAMFS_O_CREAT | RAMFS_O_TRUNC);
+        int64_t h = vfs_open(ramfs_tid(), path, VFS_O_CREAT | VFS_O_TRUNC);
         if (h < 0) {
-            kprintf("[boot] /bin seed: FATAL: ramfs_open('%s') failed rc=%ld\n", path, h);
+            kprintf("[boot] /bin seed: FATAL: vfs_open('%s') failed rc=%ld\n", path, h);
             for (;;) { asm volatile("cli; hlt"); }
         }
         uint64_t off = 0;
         while (off < sz) {
             uint64_t chunk = sz - off;
-            if (chunk > RAMFS_WRITE_MAX) {
-                chunk = RAMFS_WRITE_MAX;
+            if (chunk > VFS_WRITE_MAX) {
+                chunk = VFS_WRITE_MAX;
             }
-            int64_t n = ramfs_write((uint64_t)h, start + off, chunk);
+            int64_t n = vfs_write(ramfs_tid(), (uint64_t)h, start + off, chunk);
             if (n <= 0) {
-                kprintf("[boot] /bin seed: FATAL: ramfs_write('%s') failed at off=%lu\n",
+                kprintf("[boot] /bin seed: FATAL: vfs_write('%s') failed at off=%lu\n",
                         path, off);
                 for (;;) { asm volatile("cli; hlt"); }
             }
             off += (uint64_t)n;
         }
-        ramfs_close((uint64_t)h);
+        vfs_close(ramfs_tid(), (uint64_t)h);
     }
     kprintf("[boot] /bin seed: %lu real binaries copied into ramfs\n",
             (uint64_t)(sizeof(names) / sizeof(names[0])));
@@ -122,25 +127,25 @@ void ramfs_etc_seed_init(void) {
     }
     uint64_t sz = (uint64_t)(end - start);
 
-    int64_t h = ramfs_open("etc/rc.conf", RAMFS_O_CREAT | RAMFS_O_TRUNC);
+    int64_t h = vfs_open(ramfs_tid(), "etc/rc.conf", VFS_O_CREAT | VFS_O_TRUNC);
     if (h < 0) {
-        kprintf("[boot] /etc seed: ramfs_open('etc/rc.conf') failed rc=%ld\n", h);
+        kprintf("[boot] /etc seed: vfs_open('etc/rc.conf') failed rc=%ld\n", h);
         return;
     }
     uint64_t off = 0;
     while (off < sz) {
         uint64_t chunk = sz - off;
-        if (chunk > RAMFS_WRITE_MAX) {
-            chunk = RAMFS_WRITE_MAX;
+        if (chunk > VFS_WRITE_MAX) {
+            chunk = VFS_WRITE_MAX;
         }
-        int64_t n = ramfs_write((uint64_t)h, start + off, chunk);
+        int64_t n = vfs_write(ramfs_tid(), (uint64_t)h, start + off, chunk);
         if (n <= 0) {
-            kprintf("[boot] /etc seed: ramfs_write('etc/rc.conf') failed at off=%lu\n", off);
-            ramfs_close((uint64_t)h);
+            kprintf("[boot] /etc seed: vfs_write('etc/rc.conf') failed at off=%lu\n", off);
+            vfs_close(ramfs_tid(), (uint64_t)h);
             return;
         }
         off += (uint64_t)n;
     }
-    ramfs_close((uint64_t)h);
+    vfs_close(ramfs_tid(), (uint64_t)h);
     kprintf("[boot] /etc seed: rc.conf (%lu bytes) copied into ramfs\n", sz);
 }
