@@ -106,6 +106,14 @@ $(APPS_BUILD_DIR)/bootfs/bootfs: $(APPS_BUILD_DIR)/bootfs/bootfs.c.o $(APP_COMMO
 	$(LD) $(APP_LDFLAGS) -T apps/link/bootfs.ld -e _start -o $@ \
 	    $(APPS_BUILD_DIR)/bootfs/bootfs.c.o $(APP_COMMON_OBJ)
 
+$(APPS_BUILD_DIR)/diskfs/diskfs.c.o: apps/diskfs/diskfs.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(APPS_BUILD_DIR)/diskfs/diskfs: $(APPS_BUILD_DIR)/diskfs/diskfs.c.o $(APP_COMMON_OBJ) apps/link/diskfs.ld
+	$(LD) $(APP_LDFLAGS) -T apps/link/diskfs.ld -e _start -o $@ \
+	    $(APPS_BUILD_DIR)/diskfs/diskfs.c.o $(APP_COMMON_OBJ)
+
 MLIBC_DIR := apps/mlibc
 MLIBC_BUILD_DIR := $(BUILD_DIR)/mlibc
 MLIBC_SYSROOT := $(abspath $(BUILD_DIR)/mlibc-sysroot)
@@ -222,7 +230,7 @@ ROOTFS_STUB_NAMES := root_task file find mv
 
 $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/ramfs \
                          $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
-                         $(APPS_BUILD_DIR)/bootfs/bootfs \
+                         $(APPS_BUILD_DIR)/bootfs/bootfs $(APPS_BUILD_DIR)/diskfs/diskfs \
                          $(APPS_BUILD_DIR)/hello_initsys/hello_initsys \
                          $(APPS_BUILD_DIR)/minibox/minibox \
                          $(APPS_BUILD_DIR)/sh/sh \
@@ -235,6 +243,7 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
 	cp $(APPS_BUILD_DIR)/procfs/procfs $(ROOTFS_STAGE)/procfs
 	cp $(APPS_BUILD_DIR)/sysfs/sysfs $(ROOTFS_STAGE)/sysfs
 	cp $(APPS_BUILD_DIR)/bootfs/bootfs $(ROOTFS_STAGE)/bootfs
+	cp $(APPS_BUILD_DIR)/diskfs/diskfs $(ROOTFS_STAGE)/diskfs
 	cp $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(ROOTFS_STAGE)/hello_initsys
 	cp apps/hello_initsys/rc.conf $(ROOTFS_STAGE)/rc.conf
 	cp $(APPS_BUILD_DIR)/minibox/minibox $(ROOTFS_STAGE)/minibox
@@ -247,11 +256,20 @@ QEMU ?= qemu-system-x86_64
 QEMU_SMP ?= 2
 QEMU_MEM ?= 256
 QEMU_APPEND ?= root=root_task starter=hello_initsys
+# Zero-filled, not qemu-img-created -- that's exactly what diskfs's own
+# mkfs-on-first-boot (apps/diskfs/diskfs.c's diskfs_boot()) expects, no
+# host tooling dependency beyond truncate. Persists across `make run`
+# invocations by design (see scripts/diskfs-persist-test.sh); `make clean`
+# does not remove it -- delete it by hand to force reformatting.
+QEMU_DISK ?= $(BUILD_DIR)/diskfs.img
 
 run: $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/rootfs.tar
+	@test -f $(QEMU_DISK) || truncate -s 16M $(QEMU_DISK)
 	$(QEMU) -kernel $(BUILD_DIR)/$(TARGET) -initrd $(BUILD_DIR)/rootfs.tar \
 	    -append "$(QEMU_APPEND)" -smp $(QEMU_SMP) -m $(QEMU_MEM) \
-	    -nographic -device isa-debug-exit,iobase=0xf4,iosize=0x04
+	    -nographic -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+	    -drive file=$(QEMU_DISK),format=raw,if=none,id=blk0 \
+	    -device virtio-blk-pci,drive=blk0
 
 APP_BINS := $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
             $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(APPS_BUILD_DIR)/minibox/minibox \
