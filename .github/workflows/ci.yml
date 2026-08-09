@@ -16,7 +16,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang lld llvm make flex bison mtools xorriso grub-pc-bin grub-common qemu-system-x86
+            clang lld llvm make flex bison mtools xorriso grub-pc-bin grub-common qemu-system-x86 meson
 
       - name: Build ISO
         run: |
