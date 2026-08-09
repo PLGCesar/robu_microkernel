@@ -45,8 +45,6 @@ SECTIONS
     .tbss : {
         *(.tbss .tbss.*)
     } :data :tls
-    /* .tbss is SHT_NOBITS, so the location counter needs a manual bump here
-     * -- see mlibchello.ld's history for the corruption this avoids. */
     . = . + SIZEOF(.tbss);
 
     .data : {

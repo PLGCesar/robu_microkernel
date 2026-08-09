@@ -45,12 +45,6 @@ SECTIONS
     .tbss : {
         *(.tbss .tbss.*)
     } :data :tls
-    /* .tbss is SHT_NOBITS (a TLS template, not a real data range following
-     * it in the same PT_LOAD), so the location counter must be advanced by
-     * hand -- otherwise the next real section silently aliases .tbss's
-     * virtual address instead of getting its own, corrupting whatever
-     * follows (this is exactly what happened here: it took stdin_box/
-     * stdout_box down with it). */
     . = . + SIZEOF(.tbss);
 
     .data : {
