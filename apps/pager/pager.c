@@ -3,19 +3,6 @@
 #include "robu/ipc.h"
 #include "robu/vm.h"
 #include "robu/pmm.h"
-// The kernel's page-fault trap handler (vm_handle_page_fault(), src/core/
-// vm.c) delivers a fault to this process exactly like any other blocked
-// thread getting resumed -- it pokes this process's saved r8/r9/r10 with
-// {fault_addr, error_code, faulting_tid} and switches straight to it, so an
-// ordinary ipc_recv() picks it up with zero special-casing.
-//
-// This process must never take a page fault of its own after it spawns --
-// its own fault would need to be delivered to its own pager_tid, which is
-// itself, while it isn't blocked in ipc_recv(). That's an unrecoverable
-// deadlock. It's spawned first (tid 1, same as the kernel-mode pager it
-// replaces) with a fully eager-mapped ELF image (src/core/elf.c maps every
-// page up to p_memsz at spawn time), and this file uses only fixed static
-// storage and no dynamic growth, so it structurally cannot fault.
 void _start(void) {
     msg_regs_t m;
     tid_t from;
