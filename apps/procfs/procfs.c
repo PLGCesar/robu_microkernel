@@ -1,7 +1,7 @@
 #include "robu/types.h"
 #include "robu/uipc.h"
 #include "robu/ipc.h"
-#include "robu/procfs.h"
+#include "robu/vfs.h"
 #define PROCFS_MAX_HANDLES 16
 #define PROCFS_CONTENT_MAX 96
 typedef struct {
@@ -76,29 +76,15 @@ static int append_int(char *buf, int pos, int max, int64_t v) {
     }
     return append_uint(buf, pos, max, (uint64_t)v);
 }
-static void handle_open(msg_regs_t *m) {
-    const procfs_open_req_t *req = (const procfs_open_req_t *)m;
-    char path[PROCFS_PATH_MAX];
-    for (int i = 0; i < PROCFS_PATH_MAX; i++) {
-        path[i] = req->path[i];
-    }
-    procfs_open_reply_t *reply = (procfs_open_reply_t *)m;
-    uint32_t tid = parse_tid_status_path(path);
-    if (tid == 0) {
-        reply->status = PROCFS_ERR_NOT_FOUND;
-        return;
-    }
+// Shared by OPEN (persists into a real handle slot) and STAT (ephemeral,
+// discarded after reporting size) -- both need the same "<tid>/status"
+// content for a given tid.
+static int fill_content(uint32_t tid, procfs_handle_t *hd) {
     msg_regs_t q = (msg_regs_t){0};
     q.word[0] = tid;
     int64_t rc = robu_ipc_raw(0, 0, IPC_FLAG_THREAD_INFO, &q, NULL);
     if (rc != IPC_ERR_NONE) {
-        reply->status = PROCFS_ERR_NOT_FOUND;
-        return;
-    }
-    int hidx = alloc_handle();
-    if (hidx < 0) {
-        reply->status = PROCFS_ERR_NO_SPACE;
-        return;
+        return -1;
     }
     uint64_t state = q.word[0];
     uint64_t prio = q.word[1];
@@ -124,8 +110,6 @@ static void handle_open(msg_regs_t *m) {
         }
     }
     name[ni] = '\0';
-    procfs_handle_t *hd = &handles[hidx];
-    hd->in_use = 1;
     hd->offset = 0;
     int pos = 0;
     pos = append_str(hd->content, pos, PROCFS_CONTENT_MAX, "tid=");
@@ -144,17 +128,41 @@ static void handle_open(msg_regs_t *m) {
         hd->content[pos++] = '\n';
     }
     hd->len = (uint64_t)pos;
+    return 0;
+}
+static void handle_open(msg_regs_t *m) {
+    const vfs_open_req_t *req = (const vfs_open_req_t *)m;
+    char path[VFS_PATH_MAX];
+    for (int i = 0; i < VFS_PATH_MAX; i++) {
+        path[i] = req->name[i];
+    }
+    vfs_open_reply_t *reply = (vfs_open_reply_t *)m;
+    uint32_t tid = parse_tid_status_path(path);
+    if (tid == 0) {
+        reply->status = VFS_ERR_NOT_FOUND;
+        return;
+    }
+    int hidx = alloc_handle();
+    if (hidx < 0) {
+        reply->status = VFS_ERR_NO_SPACE;
+        return;
+    }
+    procfs_handle_t *hd = &handles[hidx];
+    if (fill_content(tid, hd) != 0) {
+        reply->status = VFS_ERR_NOT_FOUND;
+        return;
+    }
+    hd->in_use = 1;
     reply->status = 0;
     reply->handle = (uint64_t)hidx;
-    reply->size = hd->len;
 }
 static void handle_read(msg_regs_t *m) {
-    const procfs_read_req_t *req = (const procfs_read_req_t *)m;
+    const vfs_read_req_t *req = (const vfs_read_req_t *)m;
     uint64_t h = req->handle;
-    uint64_t len = req->len > PROCFS_READ_MAX ? PROCFS_READ_MAX : req->len;
-    procfs_read_reply_t *reply = (procfs_read_reply_t *)m;
+    uint64_t len = req->len > VFS_READ_MAX ? VFS_READ_MAX : req->len;
+    vfs_read_reply_t *reply = (vfs_read_reply_t *)m;
     if (!valid_handle(h)) {
-        reply->status = PROCFS_ERR_BAD_HANDLE;
+        reply->status = VFS_ERR_BAD_HANDLE;
         return;
     }
     procfs_handle_t *hd = &handles[h];
@@ -167,15 +175,50 @@ static void handle_read(msg_regs_t *m) {
     reply->status = (int64_t)n;
 }
 static void handle_close(msg_regs_t *m) {
-    const procfs_close_req_t *req = (const procfs_close_req_t *)m;
-    procfs_close_reply_t *reply = (procfs_close_reply_t *)m;
+    const vfs_close_req_t *req = (const vfs_close_req_t *)m;
+    vfs_close_reply_t *reply = (vfs_close_reply_t *)m;
     uint64_t h = req->handle;
     if (!valid_handle(h)) {
-        reply->status = PROCFS_ERR_BAD_HANDLE;
+        reply->status = VFS_ERR_BAD_HANDLE;
         return;
     }
     handles[h].in_use = 0;
     reply->status = 0;
+}
+static void handle_stat(msg_regs_t *m) {
+    const vfs_stat_req_t *req = (const vfs_stat_req_t *)m;
+    char path[VFS_PATH_MAX];
+    for (int i = 0; i < VFS_PATH_MAX; i++) {
+        path[i] = req->name[i];
+    }
+    vfs_stat_reply_t *reply = (vfs_stat_reply_t *)m;
+    uint32_t tid = parse_tid_status_path(path);
+    if (tid == 0) {
+        reply->status = VFS_ERR_NOT_FOUND;
+        return;
+    }
+    procfs_handle_t scratch = {0};
+    if (fill_content(tid, &scratch) != 0) {
+        reply->status = VFS_ERR_NOT_FOUND;
+        return;
+    }
+    reply->status = 0;
+    reply->size = scratch.len;
+    reply->is_dir = 0;
+    reply->ino = (uint64_t)tid;
+}
+static void handle_fstat(msg_regs_t *m) {
+    const vfs_fstat_req_t *req = (const vfs_fstat_req_t *)m;
+    uint64_t h = req->handle;
+    vfs_stat_reply_t *reply = (vfs_stat_reply_t *)m;
+    if (!valid_handle(h)) {
+        reply->status = VFS_ERR_BAD_HANDLE;
+        return;
+    }
+    reply->status = 0;
+    reply->size = handles[h].len;
+    reply->is_dir = 0;
+    reply->ino = h + 1;
 }
 void _start(void) {
     msg_regs_t m;
@@ -183,17 +226,28 @@ void _start(void) {
     for (;;) {
         ipc_recv(IPC_TID_ANY, &m, &from);
         switch (m.word[0]) {
-        case PROCFS_OP_OPEN:
+        case VFS_OP_OPEN:
             handle_open(&m);
             break;
-        case PROCFS_OP_READ:
+        case VFS_OP_READ:
             handle_read(&m);
             break;
-        case PROCFS_OP_CLOSE:
+        case VFS_OP_CLOSE:
             handle_close(&m);
             break;
+        case VFS_OP_STAT:
+            handle_stat(&m);
+            break;
+        case VFS_OP_FSTAT:
+            handle_fstat(&m);
+            break;
+        case VFS_OP_READDIR:
+        case VFS_OP_RENAME:
+        case VFS_OP_UNLINK:
+            m.word[0] = (uint64_t)(int64_t)VFS_ERR_NOT_SUPPORTED;
+            break;
         default:
-            ((procfs_open_reply_t *)&m)->status = PROCFS_ERR_NOT_FOUND;
+            m.word[0] = (uint64_t)(int64_t)VFS_ERR_NOT_FOUND;
             break;
         }
         ipc_send(from, &m);
