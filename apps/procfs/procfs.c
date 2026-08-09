@@ -192,6 +192,16 @@ static void handle_stat(msg_regs_t *m) {
         path[i] = req->name[i];
     }
     vfs_stat_reply_t *reply = (vfs_stat_reply_t *)m;
+    if (path[0] == '\0') {
+        // The mount's own root (see resolve_mount_for_dir() in
+        // sysdeps.cpp): procfs has no real directories, so this is the
+        // only directory it ever reports.
+        reply->status = 0;
+        reply->size = 0;
+        reply->is_dir = 1;
+        reply->ino = 0;
+        return;
+    }
     uint32_t tid = parse_tid_status_path(path);
     if (tid == 0) {
         reply->status = VFS_ERR_NOT_FOUND;
@@ -220,6 +230,34 @@ static void handle_fstat(msg_regs_t *m) {
     reply->is_dir = 0;
     reply->ino = h + 1;
 }
+// Mirrors SCHED_MAX_THREADS (include/robu/sched.h) -- there's no
+// ring-3-visible "enumerate all tids" verb, so listing /proc probes every
+// possible tid via the same per-tid IPC_FLAG_THREAD_INFO query
+// fill_content() already uses for individual lookups.
+#define PROCFS_MAX_SCAN_TID 64
+static void handle_readdir(msg_regs_t *m) {
+    const vfs_readdir_req_t *req = (const vfs_readdir_req_t *)m;
+    uint64_t want = req->index;
+    vfs_readdir_reply_t *reply = (vfs_readdir_reply_t *)m;
+    uint64_t seen = 0;
+    for (uint32_t tid = 1; tid < PROCFS_MAX_SCAN_TID; tid++) {
+        msg_regs_t q = (msg_regs_t){0};
+        q.word[0] = tid;
+        int64_t rc = robu_ipc_raw(0, 0, IPC_FLAG_THREAD_INFO, &q, NULL);
+        if (rc != IPC_ERR_NONE) {
+            continue;
+        }
+        if (seen == want) {
+            reply->status = 0;
+            reply->is_dir = 0;
+            int pos = append_uint(reply->name, 0, VFS_NAME_MAX, tid);
+            reply->name[pos] = '\0';
+            return;
+        }
+        seen++;
+    }
+    reply->status = VFS_ERR_NOT_FOUND;
+}
 void _start(void) {
     msg_regs_t m;
     tid_t from;
@@ -242,6 +280,8 @@ void _start(void) {
             handle_fstat(&m);
             break;
         case VFS_OP_READDIR:
+            handle_readdir(&m);
+            break;
         case VFS_OP_RENAME:
         case VFS_OP_UNLINK:
             m.word[0] = (uint64_t)(int64_t)VFS_ERR_NOT_SUPPORTED;

@@ -75,52 +75,87 @@ void root_task_init(paddr_t untyped_base, uint64_t untyped_size) {
     kprintf("[boot] root task: tid=%u\n", root->tid);
 }
 
-void ramfs_bin_seed_init(void) {
-    static const char *const names[] = {
-        "sh", "ls", "cat", "touch", "tail", "file", "find", "cp", "mv"
-    };
-    for (unsigned i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-        const uint8_t *start, *end;
-        if (rootfs_lookup(names[i], &start, &end) != 0) {
-            kprintf("[boot] /bin seed: FATAL: rootfs has no entry named '%s'\n", names[i]);
-            for (;;) { asm volatile("cli; hlt"); }
-        }
-        uint64_t sz = (uint64_t)(end - start);
-
-        char path[VFS_NAME_MAX];
-        uint32_t p = 0;
-        static const char prefix[] = "bin/";
-        for (uint32_t j = 0; prefix[j] && p < sizeof(path) - 1; j++) {
-            path[p++] = prefix[j];
-        }
-        for (uint32_t j = 0; names[i][j] && p < sizeof(path) - 1; j++) {
-            path[p++] = names[i][j];
-        }
-        path[p] = '\0';
-
-        int64_t h = vfs_open(ramfs_tid(), path, VFS_O_CREAT | VFS_O_TRUNC);
-        if (h < 0) {
-            kprintf("[boot] /bin seed: FATAL: vfs_open('%s') failed rc=%ld\n", path, h);
-            for (;;) { asm volatile("cli; hlt"); }
-        }
-        uint64_t off = 0;
-        while (off < sz) {
-            uint64_t chunk = sz - off;
-            if (chunk > VFS_WRITE_MAX) {
-                chunk = VFS_WRITE_MAX;
-            }
-            int64_t n = vfs_write(ramfs_tid(), (uint64_t)h, start + off, chunk);
-            if (n <= 0) {
-                kprintf("[boot] /bin seed: FATAL: vfs_write('%s') failed at off=%lu\n",
-                        path, off);
-                for (;;) { asm volatile("cli; hlt"); }
-            }
-            off += (uint64_t)n;
-        }
-        vfs_close(ramfs_tid(), (uint64_t)h);
+// Copies the rootfs.tar entry named `rootfs_name` into ramfs at `ramfs_path`
+// (a real, byte-for-byte file, not a symlink). Used both for /bin's
+// non-minibox real binaries (sh + the stub commands) and for placing
+// hello_initsys at /usr/sbin -- FATALs on any failure since every caller
+// here is boot-critical seeding, matching this file's existing convention.
+static void seed_binary_copy(const char *rootfs_name, const char *ramfs_path) {
+    const uint8_t *start, *end;
+    if (rootfs_lookup(rootfs_name, &start, &end) != 0) {
+        kprintf("[boot] seed: FATAL: rootfs has no entry named '%s'\n", rootfs_name);
+        for (;;) { asm volatile("cli; hlt"); }
     }
-    kprintf("[boot] /bin seed: %lu real binaries copied into ramfs\n",
-            (uint64_t)(sizeof(names) / sizeof(names[0])));
+    uint64_t sz = (uint64_t)(end - start);
+    int64_t h = vfs_open(ramfs_tid(), ramfs_path, VFS_O_CREAT | VFS_O_TRUNC);
+    if (h < 0) {
+        kprintf("[boot] seed: FATAL: vfs_open('%s') failed rc=%ld\n", ramfs_path, h);
+        for (;;) { asm volatile("cli; hlt"); }
+    }
+    uint64_t off = 0;
+    while (off < sz) {
+        uint64_t chunk = sz - off;
+        if (chunk > VFS_WRITE_MAX) {
+            chunk = VFS_WRITE_MAX;
+        }
+        int64_t n = vfs_write(ramfs_tid(), (uint64_t)h, start + off, chunk);
+        if (n <= 0) {
+            kprintf("[boot] seed: FATAL: vfs_write('%s') failed at off=%lu\n",
+                    ramfs_path, off);
+            for (;;) { asm volatile("cli; hlt"); }
+        }
+        off += (uint64_t)n;
+    }
+    vfs_close(ramfs_tid(), (uint64_t)h);
+}
+
+void ramfs_bin_seed_init(void) {
+    static const char *const real_names[] = {
+        "sh", "minibox", "file", "find", "mv"
+    };
+    for (unsigned i = 0; i < sizeof(real_names) / sizeof(real_names[0]); i++) {
+        char path[VFS_NAME_MAX] = "bin/";
+        for (uint32_t j = 0, p = 4; real_names[i][j] && p < sizeof(path) - 1; j++, p++) {
+            path[p] = real_names[i][j];
+        }
+        seed_binary_copy(real_names[i], path);
+    }
+    // Every command minibox itself implements (apps/minibox/src/minibox.c's
+    // commands[] table, filtered by apps/minibox/include/config.h's
+    // CONFIG_* gates -- "arch" and "init" are in the table but not
+    // config'd in, so they're excluded here too), symlinked to the one
+    // real copy above rather than duplicated: minibox dispatches on
+    // basename(argv[0]), so `ls`/`grep`/etc invoked through their symlink
+    // read minibox's own bytes via ramfs's transparent open()-time symlink
+    // resolution and still see the name they were actually invoked as.
+    static const char *const minibox_cmds[] = {
+        "basename", "cal", "cat", "clear", "cmp", "cp", "cut", "date",
+        "dirname", "echo", "env", "expand", "factor", "false", "fold",
+        "free", "grep", "head", "hexdump", "hostname", "kill", "link",
+        "ls", "mkdir", "mknod", "nohup", "od", "paste", "ps", "rm",
+        "rmdir", "sleep", "sort", "sync", "tail", "touch", "tr", "true",
+        "tty", "unexpand", "uniq", "unlink", "update", "uptime", "vmstat",
+        "w", "wc", "whoami", "xxd", "yes"
+    };
+    unsigned nsyms = sizeof(minibox_cmds) / sizeof(minibox_cmds[0]);
+    for (unsigned i = 0; i < nsyms; i++) {
+        char path[VFS_NAME_MAX] = "bin/";
+        for (uint32_t j = 0, p = 4; minibox_cmds[i][j] && p < sizeof(path) - 1; j++, p++) {
+            path[p] = minibox_cmds[i][j];
+        }
+        int64_t rc = vfs_symlink(ramfs_tid(), path, "bin/minibox");
+        if (rc != 0) {
+            kprintf("[boot] /bin seed: FATAL: vfs_symlink('%s') failed rc=%ld\n", path, rc);
+            for (;;) { asm volatile("cli; hlt"); }
+        }
+    }
+    kprintf("[boot] /bin seed: %lu real binaries + %u symlinks copied into ramfs\n",
+            (uint64_t)(sizeof(real_names) / sizeof(real_names[0])), nsyms);
+}
+
+void ramfs_usr_seed_init(void) {
+    seed_binary_copy("hello_initsys", "usr/sbin/hello_initsys");
+    kprintf("[boot] /usr seed: hello_initsys copied into ramfs\n");
 }
 
 void ramfs_etc_seed_init(void) {

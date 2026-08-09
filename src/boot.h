@@ -36,7 +36,9 @@ void rootfs_init(void);
 void root_task_init(paddr_t untyped_base, uint64_t untyped_size);
 void ramfs_bin_seed_init(void);
 void ramfs_etc_seed_init(void);
+void ramfs_usr_seed_init(void);
 
+tid_t pager_init(void);
 tid_t devfs_init(void);
 tid_t ramfs_init(void);
 tid_t procfs_init(void);

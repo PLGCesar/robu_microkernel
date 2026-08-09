@@ -19,6 +19,10 @@ static tid_t blk_owner_tid = 0;
 void ipc_grant_blk_owner(tid_t tid) {
     blk_owner_tid = tid;
 }
+static tid_t pager_owner_tid = 0;
+void ipc_grant_pager_owner(tid_t tid) {
+    pager_owner_tid = tid;
+}
 // Kernel-resident staging buffer for IPC_FLAG_BLK_IO's LOAD/READ_CHUNK/
 // WRITE_CHUNK/COMMIT sub-ops (src/core/virtio_blk.c's own req_data buffer
 // is driver-internal, DMA-mapped, and reused on every request -- this is a
@@ -489,6 +493,39 @@ void sys_ipc(void) {
                 return;
             }
             f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+            return;
+        }
+        if (flags & IPC_FLAG_RESOLVE_FAULT) {
+            // Gated like IPC_FLAG_BLK_IO gates apps/diskfs: exactly one
+            // legitimate caller (apps/pager, granted via
+            // ipc_grant_pager_owner() at boot), everyone else is refused.
+            // This is the one privileged operation (frame allocation +
+            // page-table write) the ring-3 pager cannot do itself -- the
+            // *decision* of which color/target/vaddr to resolve a fault
+            // with is made in apps/pager/pager.c; the kernel just carries
+            // it out on the pager's behalf, the same mechanism split
+            // IPC_FLAG_MAP/XFER/SHARE already use for cross-address-space
+            // mapping.
+            if (cur->tid != pager_owner_tid || pager_owner_tid == 0) {
+                f->rax = (uint64_t)IPC_ERR_NO_CAP;
+                return;
+            }
+            tid_t target = (tid_t)f->r8;
+            vaddr_t page_va = (vaddr_t)f->r9;
+            int color = (int)f->r10;
+            uint32_t prot = (uint32_t)f->r12;
+            tcb_t *target_tcb = sched_get_tcb(target);
+            if (!target_tcb) {
+                f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+                return;
+            }
+            paddr_t frame = pmm_alloc(color);
+            if (!frame) {
+                f->rax = (uint64_t)IPC_ERR_NO_MEM;
+                return;
+            }
+            arch_vm_map_page(target_tcb->address_space, page_va, frame, prot);
+            f->rax = (uint64_t)IPC_ERR_NONE;
             return;
         }
         if (flags & IPC_FLAG_SET_FSBASE) {

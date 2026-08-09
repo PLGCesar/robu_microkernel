@@ -185,6 +185,16 @@ static void handle_stat(msg_regs_t *m) {
         name[i] = req->name[i];
     }
     vfs_stat_reply_t *reply = (vfs_stat_reply_t *)m;
+    if (name[0] == '\0') {
+        // The mount's own root (see resolve_mount_for_dir() in
+        // sysdeps.cpp): sysfs has no real directories, so this is the
+        // only directory it ever reports.
+        reply->status = 0;
+        reply->size = 0;
+        reply->is_dir = 1;
+        reply->ino = 0;
+        return;
+    }
     sysfs_handle_t scratch = {0};
     int id = fill_content(name, &scratch);
     if (id == 0) {
@@ -209,6 +219,24 @@ static void handle_fstat(msg_regs_t *m) {
     reply->is_dir = 0;
     reply->ino = h + 1;
 }
+static void handle_readdir(msg_regs_t *m) {
+    static const char *const names[] = { "meminfo", "schedstats", "uptime" };
+    const vfs_readdir_req_t *req = (const vfs_readdir_req_t *)m;
+    uint64_t want = req->index;
+    vfs_readdir_reply_t *reply = (vfs_readdir_reply_t *)m;
+    if (want >= sizeof(names) / sizeof(names[0])) {
+        reply->status = VFS_ERR_NOT_FOUND;
+        return;
+    }
+    reply->status = 0;
+    reply->is_dir = 0;
+    int i = 0;
+    while (names[want][i]) {
+        reply->name[i] = names[want][i];
+        i++;
+    }
+    reply->name[i] = '\0';
+}
 void _start(void) {
     msg_regs_t m;
     tid_t from;
@@ -231,6 +259,8 @@ void _start(void) {
             handle_fstat(&m);
             break;
         case VFS_OP_READDIR:
+            handle_readdir(&m);
+            break;
         case VFS_OP_RENAME:
         case VFS_OP_UNLINK:
             m.word[0] = (uint64_t)(int64_t)VFS_ERR_NOT_SUPPORTED;

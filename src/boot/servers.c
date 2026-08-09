@@ -8,6 +8,33 @@
 #include "robu/rootfs.h"
 #include "../boot.h"
 
+// Must be the very first spawn of any kind in kmain() -- alloc_tcb() (src/
+// core/sched.c) is shared by the kernel-thread and ring-3-spawn paths alike
+// and hands out tids in call order, so being first here is what keeps this
+// process landing on tid 1, preserving PAGER_TID==1 as a literal constant
+// everywhere else in the codebase (src/boot/rootfs.c, servers.c, toybox.c,
+// testing.c, captable.c's ROOT_CHILD_PAGER_TID) with zero other call sites
+// needing to change.
+tid_t pager_init(void) {
+    const uint8_t *pager_elf_start, *pager_elf_end;
+    if (rootfs_lookup("pager", &pager_elf_start, &pager_elf_end) != 0) {
+        kprintf("[boot] FATAL: rootfs has no entry named 'pager'\n");
+        for (;;) { asm volatile("cli; hlt"); }
+    }
+    // Self-referential pager_tid: safe specifically because this process
+    // must never fault after spawn (see apps/pager/pager.c) -- its own
+    // pager_tid is never actually exercised.
+    tcb_t *pager = elf_load_and_spawn("pager", pager_elf_start, pager_elf_end, 18, PAGER_TID);
+    if (!pager) {
+        kprintf("[boot] FATAL: pager failed to load\n");
+        for (;;) { asm volatile("cli; hlt"); }
+    }
+    // Sole authorized IPC_FLAG_RESOLVE_FAULT caller (src/core/ipc.c).
+    ipc_grant_pager_owner(pager->tid);
+    kprintf("[boot] pager: tid=%u\n", pager->tid);
+    return pager->tid;
+}
+
 tid_t devfs_init(void) {
     const char *devfs_name = cmdline_get("devfs");
     if (!devfs_name) {
