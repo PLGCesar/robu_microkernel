@@ -6,14 +6,12 @@
     .asciz "Xen"
     .long start
 
-/* Page-table flag bits */
 #define PTE_P   (1 << 0)
 #define PTE_W   (1 << 1)
 #define PTE_PS  (1 << 7)
 
 .section .bss
 
-/* The BSP's kernel stack (see file header). */
 .align 16
 .global kstack_bottom
 .global kstack_top
@@ -43,16 +41,20 @@ boot_pd:
 pvh_start_info_ptr:
     .skip 8
 
+.global multiboot2_info_ptr
+multiboot2_info_ptr:
+    .skip 8
+
 .section .rodata
 .align 8
 gdt64:
-    .quad 0                         /* null */
-    .quad 0x00209A0000000000        /* 0x08: kernel code, long mode */
-    .quad 0x0000920000000000        /* 0x10: kernel data */
+    .quad 0
+    .quad 0x00209A0000000000
+    .quad 0x0000920000000000
 gdt64_end:
 gdt64_ptr:
     .word gdt64_end - gdt64 - 1
-    .long gdt64                     /* 32-bit base is fine: we link at 1 MiB */
+    .long gdt64
 
 .section .text
 .code32
@@ -60,7 +62,15 @@ gdt64_ptr:
 .type start, @function
 start:
     cli
+
+    /* Verifica se o boot veio via Multiboot2 (eax = 0x36d76289) ou PVH */
+    cmpl $0x36d76289, %eax
+    je 1f
     movl %ebx, pvh_start_info_ptr
+    jmp 2f
+1:
+    movl %ebx, multiboot2_info_ptr
+2:
 
     movl $kstack_top, %esp
 
@@ -70,11 +80,11 @@ start:
     movl $boot_pd, %edi
     movl $(PTE_P | PTE_W | PTE_PS), %eax
     movl $512, %ecx
-1:
+3:
     movl %eax, (%edi)
     addl $0x200000, %eax
     addl $8, %edi
-    loop 1b
+    loop 3b
 
     movl $boot_pml4, %eax
     movl %eax, %cr3
@@ -111,7 +121,7 @@ long_entry:
     call kmain
 
     cli
-1:  hlt
-    jmp 1b
+4:  hlt
+    jmp 4b
 
 .section .note.GNU-stack, "", @progbits

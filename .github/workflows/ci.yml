@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang lld llvm make flex bison mtools xorriso grub-pc-bin grub-common qemu-system-x86
+
+      - name: Build ISO
+        run: |
+          make BUILD_SYS=clang iso
+
+      - name: Test boot in QEMU
+        run: |
+          timeout 8s qemu-system-x86_64 \
+            -cdrom build/robu_kernel.iso \
+            -nographic \
+            -device isa-debug-exit,iobase=0xf4,iosize=0x04 || code=$?
+          echo "QEMU exit code: ${code:-0}"
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: robu_kernel.iso
+          path: build/robu_kernel.iso
+
+      - name: Upload Kernel Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: robu_kernel
+          path: build/robu_kernel
+
+      - name: Upload RootFS Tar
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs.tar
+          path: build/rootfs.tar

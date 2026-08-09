@@ -2,3 +2,4 @@ build/
 .DS_Store
 docs/
 apps/hello_initsys/build
+examples/
