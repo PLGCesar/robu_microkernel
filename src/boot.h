@@ -33,6 +33,7 @@ static inline uint64_t rdtsc(void) {
     } while (0)
 
 void rootfs_init(void);
+void rootfs_load_module(void);
 void root_task_init(paddr_t untyped_base, uint64_t untyped_size);
 void ramfs_bin_seed_init(void);
 void ramfs_etc_seed_init(void);
