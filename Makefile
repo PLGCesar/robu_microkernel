@@ -40,9 +40,9 @@ ASM_SRCS := $(wildcard $(ARCH_DIR)/src/*.S)
 
 OBJS := $(C_SRCS:%.c=$(BUILD_DIR)/%.c.o) $(ASM_SRCS:%.S=$(BUILD_DIR)/%.S.o)
 
-.PHONY: all clean mlibc minibox run
+.PHONY: all clean mlibc minibox run iso
 
-all: $(BUILD_DIR)/$(TARGET)
+all: $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/rootfs.tar
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -110,13 +110,6 @@ $(APPS_BUILD_DIR)/libc/setjmp.S.o: apps/libc/src/setjmp.S
 
 CONFUSE_DIR := apps/confuse/src
 CONFUSE_BUILD_DIR := $(APPS_BUILD_DIR)/confuse
-# This kernel's scheduler never saves/restores FPU/SSE state across context
-# switches or traps (see arch/x86_64/src/trap.S), so no code anywhere in
-# userspace may touch the x87/SSE units -- including via the "double" ABI,
-# which on x86_64 SysV requires XMM0/XMM1 regardless of whether the code
-# actually does floating-point math. CONFUSE_NO_FLOAT (a small local patch
-# to confuse.c) compiles out CFGT_FLOAT support so the library never emits
-# any double-typed parameter, return, or local.
 CONFUSE_CFLAGS := $(LIBC_SHIM_CFLAGS) -I$(CONFUSE_DIR) \
                    -DHAVE_UNISTD_H -DHAVE_SYS_STAT_H -DHAVE_STRING_H \
                    -DHAVE_STRDUP -DHAVE_STRNDUP -DHAVE_STRCASECMP -DHAVE_FMEMOPEN \
@@ -179,19 +172,6 @@ $(APPS_BUILD_DIR)/sh/sh: $(APPS_BUILD_DIR)/sh/minibox-shell.c.o $(LIBC_SHIM_OBJS
 
 sh: $(APPS_BUILD_DIR)/sh/sh
 
-MLIBC_DIR := apps/mlibc
-MLIBC_BUILD_DIR := $(BUILD_DIR)/mlibc
-MLIBC_SYSROOT := $(abspath $(BUILD_DIR)/mlibc-sysroot)
-MLIBC_CROSS := apps/mlibc-robu-cross.ini
-
-mlibc:
-	@if [ ! -f $(MLIBC_BUILD_DIR)/build.ninja ]; then \
-	    meson setup $(MLIBC_BUILD_DIR) $(MLIBC_DIR) --cross-file $(MLIBC_CROSS) \
-	        -Dlibgcc_dependency=false -Ddefault_library=static --prefix=/usr; \
-	fi
-	ninja -C $(MLIBC_BUILD_DIR)
-	DESTDIR=$(MLIBC_SYSROOT) ninja -C $(MLIBC_BUILD_DIR) install
-
 $(APPS_BUILD_DIR)/stub/stub.c.o: apps/stub/stub.c
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -201,9 +181,6 @@ $(APPS_BUILD_DIR)/stub/stub: $(APPS_BUILD_DIR)/stub/stub.c.o apps/link/stub.ld
 	    $(APPS_BUILD_DIR)/stub/stub.c.o
 
 ROOTFS_STAGE := $(BUILD_DIR)/rootfs-stage
-# ls/cat/touch/tail/cp are real minibox applets; aliasing them to the minibox
-# binary (which dispatches on argv[0]) lets a direct `__libc_spawn("ls", ...)`
-# resolve to the real command instead of shadowing it behind a no-op stub.
 ROOTFS_MINIBOX_ALIASES := ls cat touch tail cp
 ROOTFS_STUB_NAMES := root_task file find mv
 
@@ -228,16 +205,18 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
 	for n in $(ROOTFS_STUB_NAMES); do cp $(APPS_BUILD_DIR)/stub/stub $(ROOTFS_STAGE)/$$n; done
 	(cd $(ROOTFS_STAGE) && tar --format ustar -cf $(abspath $@) $$(ls))
 
+iso: all
+	@mkdir -p $(BUILD_DIR)/iso_root/boot/grub
+	cp $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/iso_root/boot/robu_kernel
+	cp $(BUILD_DIR)/rootfs.tar $(BUILD_DIR)/iso_root/boot/rootfs.tar
+	cp iso/boot/grub/grub.cfg $(BUILD_DIR)/iso_root/boot/grub/grub.cfg
+	grub-mkrescue -o $(BUILD_DIR)/robu_kernel.iso $(BUILD_DIR)/iso_root
+
 QEMU ?= qemu-system-x86_64
 QEMU_SMP ?= 2
 QEMU_MEM ?= 256
-QEMU_APPEND ?= root=root_task starter=hello_initsys
 
-run: $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/rootfs.tar
-	$(QEMU) -kernel $(BUILD_DIR)/$(TARGET) -initrd $(BUILD_DIR)/rootfs.tar \
-	    -append "$(QEMU_APPEND)" -smp $(QEMU_SMP) -m $(QEMU_MEM) \
+run: iso
+	$(QEMU) -cdrom $(BUILD_DIR)/robu_kernel.iso \
+	    -smp $(QEMU_SMP) -m $(QEMU_MEM) \
 	    -nographic -device isa-debug-exit,iobase=0xf4,iosize=0x04
-
-APP_BINS := $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
-            $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(APPS_BUILD_DIR)/minibox/minibox \
-

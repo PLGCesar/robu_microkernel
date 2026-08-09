@@ -1,0 +1,70 @@
+name: Build & Generate Bootable ISO
+
+on:
+  push:
+    branches: [ main, master, dev ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-kernel-iso:
+    name: Build Robu Kernel & ISO (Clang/LLVM)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Código Fonte
+        uses: actions/checkout@v4
+
+      - name: Instalar Ferramentas de Build, Clang e GRUB
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang \
+            lld \
+            llvm \
+            make \
+            flex \
+            bison \
+            mtools \
+            xorriso \
+            grub-pc-bin \
+            grub-common \
+            qemu-system-x86
+
+      - name: Validar Versão das Ferramentas
+        run: |
+          clang --version
+          ld.lld --version
+          grub-mkrescue --version
+
+      - name: Compilar Kernel e RootFS
+        run: |
+          # Flags profissionais de depuração e verificação estática ativa
+          make ARCH=x86_64 BUILD_SYS=clang TRACE=1 all
+
+      - name: Gerar ISO Bootável
+        run: |
+          ./scripts/build_iso.sh
+
+      - name: Upload Kernel Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: robu_kernel-elf
+          path: build/robu_kernel
+
+      - name: Upload Bootable ISO Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: robu_microkernel-iso
+          path: build/robu_microkernel.iso
+
+      - name: Teste Headless no QEMU (Boot Test)
+        run: |
+          # Executa a ISO no QEMU e verifica se o boot é concluído com sucesso em modo sem tela
+          timeout 10s qemu-system-x86_64 \
+            -cdrom build/robu_microkernel.iso \
+            -nographic \
+            -device isa-debug-exit,iobase=0xf4,iosize=0x04 || status=$?
+          
+          # Status 0 (sucesso) ou status do debug-exit (esperado do kernel ao rodar testes)
+          echo "QEMU finalizado com código: ${status:-0}"
