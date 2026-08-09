@@ -2,14 +2,6 @@
 #include "robu/uipc.h"
 #include "robu/ipc.h"
 #include "robu/vfs.h"
-// Disk-backed filesystem server: speaks the same generic vfs.h protocol
-// every other migrated backend does (devfs/procfs/sysfs/ramfs/bootfs), but
-// persists to real storage via the kernel's virtio-blk driver, reached
-// through IPC_FLAG_BLK_IO (src/core/ipc.c) since this process has no port
-// I/O capability at all in this kernel. On-disk layout is deliberately
-// shaped like apps/ramfs/ramfs.c's in-memory model rather than a
-// real-world format (FAT/ext2) -- fixed direct blocks per file, no
-// free-block allocator, write-through on every mutating op.
 #define DISKFS_MAX_FILES     24
 #define DISKFS_MAX_HANDLES   16
 #define DISKFS_NAME_MAX      32

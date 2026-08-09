@@ -2,12 +2,6 @@
 #include "robu/uipc.h"
 #include "robu/ipc.h"
 #include "robu/vfs.h"
-// Read-only view of the kernel-resident rootfs_buf (the flat archive of
-// boot-time executables loaded via -initrd, src/boot/rootfs.c) -- exposes
-// minibox/the servers/etc themselves in a directory listing (`ls /boot`),
-// unlike /bin's copy (only 9 hardcoded names, seeded into ramfs). Every op
-// round-trips through IPC_FLAG_BOOTFS (src/core/ipc.c) since this process
-// has no direct access to kernel memory.
 #define BOOTFS_MAX_HANDLES 8
 #define BOOTFS_NAME_MAX 24
 #define BOOTFS_READ_CHUNK 40
