@@ -3,9 +3,14 @@
 #include "robu/sched.h"
 #include "robu/elf.h"
 #include "robu/cmdline.h"
-#include "robu/ramfs.h"
+#include "robu/vfs.h"
+#include "robu/kinfo.h"
 #include "robu/rootfs.h"
 #include "../boot.h"
+
+static tid_t ramfs_tid(void) {
+    return (tid_t)kinfo_user()->ramfs_tid;
+}
 
 tcb_t *toybox_spawn(const char *name, int argc, const char *const *argv, uint8_t prio) {
     const uint8_t *elf_start, *elf_end;
@@ -87,13 +92,13 @@ void toybox_pipeline_init(void) {
         return;
     }
     static const char greeting[] = "hello from the toybox port\n";
-    int64_t h = ramfs_open("greeting.txt", RAMFS_O_CREAT | RAMFS_O_TRUNC);
+    int64_t h = vfs_open(ramfs_tid(), "greeting.txt", VFS_O_CREAT | VFS_O_TRUNC);
     if (h < 0) {
         kprintf("[boot] FATAL: could not seed /greeting.txt in ramfs\n");
         for (;;) { asm volatile("cli; hlt"); }
     }
-    ramfs_write((uint64_t)h, greeting, sizeof(greeting) - 1);
-    ramfs_close((uint64_t)h);
+    vfs_write(ramfs_tid(), (uint64_t)h, greeting, sizeof(greeting) - 1);
+    vfs_close(ramfs_tid(), (uint64_t)h);
     toybox_pipeline_active = 1;
     toybox_pipeline_index = 0;
     toybox_pipeline_advance();
