@@ -7,7 +7,6 @@
 static tid_t devfs_tid = 0;
 static int64_t console_h = -1;
 
-/* Framebuffer Local para envio atômico em 1 única mensagem IPC */
 static char frame_buf[4096];
 static int frame_len = 0;
 
@@ -28,9 +27,15 @@ static void buf_num(uint64_t n) {
     buf_str(buf);
 }
 
+/* Transmite o frame inteiro em fatias respeitando VFS_WRITE_MAX (24 bytes por pacote) */
 static void flush_frame(void) {
-    if (frame_len > 0 && console_h >= 0) {
-        vfs_write(devfs_tid, (uint64_t)console_h, frame_buf, frame_len);
+    int sent = 0;
+    while (sent < frame_len && console_h >= 0) {
+        int chunk = frame_len - sent;
+        if (chunk > VFS_WRITE_MAX) chunk = VFS_WRITE_MAX;
+        int64_t n = vfs_write(devfs_tid, (uint64_t)console_h, frame_buf + sent, (uint64_t)chunk);
+        if (n <= 0) break;
+        sent += (int)n;
     }
     frame_len = 0;
 }
@@ -196,7 +201,6 @@ void _start(void) {
 
     set_raw_mode(1);
 
-    /* Limpeza inicial de tela única */
     frame_len = 0;
     buf_str("\033[0m\033[2J\033[H");
     flush_frame();
@@ -218,7 +222,6 @@ void _start(void) {
             }
 
             frame_len = 0;
-            /* Move o cursor para o topo sem apagar a tela (Sobrescrita Flicker-Free) */
             buf_str("\033[H");
             buf_str("\033[44;37;1m --- Robu Native TUI File Manager --- \033[0m\033[K\r\n");
             buf_str("\033[36m Path:\033[0m ");
@@ -262,7 +265,6 @@ void _start(void) {
                 }
             }
 
-            /* Limpa linhas restantes até o fim da lista para apagar rastros */
             while (lines_printed < VISIBLE_ROWS + 1) {
                 buf_str("\033[K\r\n");
                 lines_printed++;

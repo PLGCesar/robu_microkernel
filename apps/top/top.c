@@ -7,7 +7,6 @@
 static tid_t devfs_tid = 0;
 static int64_t console_h = -1;
 
-/* Framebuffer Local para envio atômico em 1 única mensagem IPC */
 static char frame_buf[4096];
 static int frame_len = 0;
 
@@ -52,8 +51,13 @@ static void buf_pad_str(const char *s, int width) {
 }
 
 static void flush_frame(void) {
-    if (frame_len > 0 && console_h >= 0) {
-        vfs_write(devfs_tid, (uint64_t)console_h, frame_buf, frame_len);
+    int sent = 0;
+    while (sent < frame_len && console_h >= 0) {
+        int chunk = frame_len - sent;
+        if (chunk > VFS_WRITE_MAX) chunk = VFS_WRITE_MAX;
+        int64_t n = vfs_write(devfs_tid, (uint64_t)console_h, frame_buf + sent, (uint64_t)chunk);
+        if (n <= 0) break;
+        sent += (int)n;
     }
     frame_len = 0;
 }
@@ -124,7 +128,6 @@ static int get_thread_info(uint32_t tid, uint64_t *state, uint64_t *prio,
 static void render_top(void) {
     frame_len = 0;
 
-    /* Cursor Home (Sobrescrita Flicker-Free sem apagar a tela) */
     buf_str("\033[H");
     buf_str("\033[44;37;1m --- Robu Microkernel Task Manager (top) --- \033[0m\033[K\r\n");
 
@@ -211,7 +214,6 @@ static void render_top(void) {
         buf_str("\033[K\r\n");
     }
 
-    /* Limpa linhas restantes da tela se processos morrerem */
     while (lines_rendered < 15) {
         buf_str("\033[K\r\n");
         lines_rendered++;
@@ -222,7 +224,6 @@ static void render_top(void) {
     buf_num(active_count);
     buf_str("  |  [q] Quit   [r] Refresh Now\033[K\r\n");
 
-    /* Envia o quadro inteiro em 1 única chamada IPC atômica */
     flush_frame();
 }
 
@@ -233,7 +234,6 @@ void _start(void) {
 
     set_raw_mode(1);
 
-    /* Limpeza inicial única */
     frame_len = 0;
     buf_str("\033[0m\033[2J\033[H");
     flush_frame();
