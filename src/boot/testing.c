@@ -19,6 +19,7 @@ static void test_report_entry(void) {
     ramfs_bin_seed_init();
     ramfs_etc_seed_init();
     ramfs_usr_seed_init();
+    ramfs_sbin_seed_init();
     const char *starter = cmdline_get("starter");
     if (!starter) {
         starter = "sh";

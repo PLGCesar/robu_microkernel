@@ -19,7 +19,7 @@ typedef struct {
     uint32_t version;
     uint32_t total_blocks;
     uint32_t file_table_block;
-    uint32_t reserved;
+    uint32_t clean_shutdown;
 } __attribute__((packed)) diskfs_superblock_t;
 typedef struct {
     uint32_t in_use;
@@ -38,6 +38,7 @@ typedef struct {
 } diskfs_handle_t;
 static diskfs_file_record_t files[DISKFS_MAX_FILES];
 static diskfs_handle_t handles[DISKFS_MAX_HANDLES];
+static diskfs_superblock_t g_sb;
 
 static void copy_bytes(void *dst_, const void *src_, uint64_t n) {
     uint8_t *dst = (uint8_t *)dst_;
@@ -142,28 +143,39 @@ static void load_file_table(void) {
     diskfs_read_block(DISKFS_FILETABLE_BLOCK, buf);
     copy_bytes(files, buf, sizeof(files));
 }
+static void persist_superblock(void) {
+    uint8_t buf[DISKFS_BLOCK_SIZE];
+    zero_bytes(buf, sizeof(buf));
+    copy_bytes(buf, &g_sb, sizeof(g_sb));
+    diskfs_write_block(DISKFS_SUPERBLOCK_BLOCK, buf);
+}
 static uint32_t file_block_num(int file_idx, int direct_idx) {
     return DISKFS_DATA_START_BLOCK + (uint32_t)file_idx * DISKFS_DIRECT_BLOCKS + (uint32_t)direct_idx;
 }
 static void diskfs_boot(void) {
     uint8_t buf[DISKFS_BLOCK_SIZE];
     diskfs_read_block(DISKFS_SUPERBLOCK_BLOCK, buf);
-    diskfs_superblock_t sb;
-    copy_bytes(&sb, buf, sizeof(sb));
-    if (sb.magic != DISKFS_MAGIC) {
-        zero_bytes(buf, sizeof(buf));
-        sb.magic = DISKFS_MAGIC;
-        sb.version = DISKFS_VERSION;
-        sb.total_blocks = 0;
-        sb.file_table_block = DISKFS_FILETABLE_BLOCK;
-        sb.reserved = 0;
-        copy_bytes(buf, &sb, sizeof(sb));
-        diskfs_write_block(DISKFS_SUPERBLOCK_BLOCK, buf);
+    copy_bytes(&g_sb, buf, sizeof(g_sb));
+    if (g_sb.magic != DISKFS_MAGIC) {
         zero_bytes(files, sizeof(files));
         persist_file_table();
+        g_sb.magic = DISKFS_MAGIC;
+        g_sb.version = DISKFS_VERSION;
+        g_sb.total_blocks = 0;
+        g_sb.file_table_block = DISKFS_FILETABLE_BLOCK;
+        g_sb.clean_shutdown = 0;
+        persist_superblock();
     } else {
         load_file_table();
+        g_sb.clean_shutdown = 0;
+        persist_superblock();
     }
+}
+static void handle_quiesce(msg_regs_t *m) {
+    vfs_quiesce_reply_t *reply = (vfs_quiesce_reply_t *)m;
+    g_sb.clean_shutdown = 1;
+    persist_superblock();
+    reply->status = 0;
 }
 
 static int name_eq(const char *a, const char *b) {
@@ -437,6 +449,9 @@ void _start(void) {
             break;
         case VFS_OP_READDIR:
             handle_readdir(&m);
+            break;
+        case VFS_OP_QUIESCE:
+            handle_quiesce(&m);
             break;
         case VFS_OP_RENAME:
         case VFS_OP_UNLINK:
