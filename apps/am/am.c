@@ -7,7 +7,6 @@
 static tid_t devfs_tid = 0;
 static int64_t console_h = -1;
 
-// --- AJUDANTES DE STRING E TTY NATIVOS ---
 static int str_eq(const char *a, const char *b) {
     int i = 0;
     while (a[i] && b[i]) {
@@ -56,7 +55,7 @@ static void print_num(uint64_t n) {
 
 static void set_raw_mode(int enable) {
     msg_regs_t m = (msg_regs_t){0};
-    m.word[0] = 10; // SYS_INFO_CAT_CONSOLE_MODE
+    m.word[0] = 10;
     m.word[1] = enable ? 1 : 0;
     robu_ipc_raw(0, 0, IPC_FLAG_SYS_INFO, &m, NULL);
 }
@@ -68,7 +67,6 @@ static int read_key(void) {
     return -1;
 }
 
-// Leitura com tolerância para sequências ANSI de setas
 static int read_key_wait(int max_tries) {
     for (int i = 0; i < max_tries; i++) {
         int k = read_key();
@@ -78,9 +76,8 @@ static int read_key_wait(int max_tries) {
     return -1;
 }
 
-// --- ESTRUTURA DO NAVEGADOR ---
 #define MAX_ENTRIES 128
-#define VISIBLE_ROWS 12 // Número máximo de itens visíveis na tela por vez
+#define VISIBLE_ROWS 12
 
 typedef struct {
     char name[VFS_NAME_MAX];
@@ -179,7 +176,6 @@ static void preview_file(const char *path, const char *filename) {
     }
 }
 
-// --- PONTO DE ENTRADA NATIVO ---
 void _start(void) {
     devfs_tid = (tid_t)kinfo_user()->devfs_tid;
     console_h = vfs_open(devfs_tid, "console", 0);
@@ -189,7 +185,7 @@ void _start(void) {
 
     char path[VFS_PATH_MAX] = "/";
     int selected = 0;
-    int top_index = 0; // Offset para scroll visual dinâmico
+    int top_index = 0;
     int dirty = 1;
 
     while (1) {
@@ -197,14 +193,13 @@ void _start(void) {
             load_dir(path);
             if (selected >= entry_count) selected = entry_count > 0 ? entry_count - 1 : 0;
 
-            // Ajusta a janela de scroll visual
             if (selected < top_index) {
                 top_index = selected;
             } else if (selected >= top_index + VISIBLE_ROWS) {
                 top_index = selected - VISIBLE_ROWS + 1;
             }
 
-            print_str("\033[2J\033[H");
+            print_str("\033[0m\033[2J\033[H");
             print_str("\033[44;37;1m --- Robu Native TUI File Manager --- \033[0m\r\n");
             print_str("\033[36m Path:\033[0m ");
             print_str(path);
@@ -255,7 +250,6 @@ void _start(void) {
 
         if (c == 'q' || c == 'Q') break;
 
-        // Tecla 'p' ou 'P' ou Backspace -> Volta para o diretório PAI
         if (c == 'p' || c == 'P' || c == 8 || c == 127) {
             go_parent(path);
             selected = 0;
@@ -266,17 +260,17 @@ void _start(void) {
             if (selected > 0) { selected--; dirty = 1; }
         } else if (c == 's' || c == 'S') {
             if (selected < entry_count - 1) { selected++; dirty = 1; }
-        } else if (c == 27) { // Tratamento de Setas
+        } else if (c == 27) {
             int c2 = read_key_wait(10);
             if (c2 == '[') {
                 int c3 = read_key_wait(10);
-                if (c3 == 'A' && selected > 0) { // SETA PARA CIMA
+                if (c3 == 'A' && selected > 0) {
                     selected--; dirty = 1;
                 }
-                else if (c3 == 'B' && selected < entry_count - 1) { // SETA PARA BAIXO
+                else if (c3 == 'B' && selected < entry_count - 1) {
                     selected++; dirty = 1;
                 }
-                else if (c3 == 'C') { // SETA PARA DIREITA (Abrir)
+                else if (c3 == 'C') {
                     if (entry_count > 0 && entries[selected].is_dir) {
                         if (str_eq(entries[selected].name, "..")) {
                             go_parent(path);
@@ -290,7 +284,7 @@ void _start(void) {
                         dirty = 1;
                     }
                 }
-                else if (c3 == 'D') { // SETA PARA ESQUERDA (Voltar ao Pai)
+                else if (c3 == 'D') {
                     go_parent(path);
                     selected = 0; top_index = 0; dirty = 1;
                 }
@@ -315,8 +309,8 @@ void _start(void) {
         }
     }
 
+    print_str("\033[0m\033[2J\033[H");
     set_raw_mode(0);
-    print_str("\033[2J\033[H");
     vfs_close(devfs_tid, (uint64_t)console_h);
     ipc_exit(0);
 }
