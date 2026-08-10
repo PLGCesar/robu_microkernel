@@ -49,6 +49,136 @@ static char pending_bytes[4];
 static int pending_len = 0;
 static int pending_pos = 0;
 
+// --- CONFIGURAÇÃO DO DRIVER VGA COM SCROLLBACK HISTÓRICO ---
+#define VGA_COLS 80
+#define VGA_ROWS 25
+#define VGA_HISTORY_ROWS 200 // Guarda até 200 linhas de histórico do terminal!
+#define DEFAULT_ATTR 0x07
+
+static volatile uint16_t *const vga_mem = (volatile uint16_t *)0xB8000;
+static uint16_t vga_history[VGA_HISTORY_ROWS][VGA_COLS];
+static int history_head = 0; // Linha atual do histórico
+static int vga_col = 0;
+static int view_offset = 0;  // Offset de rolagem (0 = ao vivo no fim, >0 = rolado pra cima)
+static uint8_t vga_attr = DEFAULT_ATTR;
+
+static int ansi_state = 0;
+static int ansi_param = 0;
+
+// Renderiza o buffer físico 0xB8000 com base na posição do scroll (view_offset)
+static void vga_flush(void) {
+    int total_avail = history_head < VGA_HISTORY_ROWS ? history_head + 1 : VGA_HISTORY_ROWS;
+    int max_offset = total_avail > VGA_ROWS ? total_avail - VGA_ROWS : 0;
+
+    if (view_offset > max_offset) view_offset = max_offset;
+    if (view_offset < 0) view_offset = 0;
+
+    int end_row = history_head - view_offset;
+    int start_row = end_row - (VGA_ROWS - 1);
+
+    for (int r = 0; r < VGA_ROWS; r++) {
+        int h_row = start_row + r;
+        if (h_row < 0) {
+            for (int c = 0; c < VGA_COLS; c++) {
+                vga_mem[r * VGA_COLS + c] = (uint16_t)((vga_attr << 8) | ' ');
+            }
+        } else {
+            int ring_idx = h_row % VGA_HISTORY_ROWS;
+            for (int c = 0; c < VGA_COLS; c++) {
+                vga_mem[r * VGA_COLS + c] = vga_history[ring_idx][c];
+            }
+        }
+    }
+
+    // Atualiza o Cursor de Hardware se estivermos na visão ao vivo
+    if (view_offset == 0) {
+        uint16_t pos = (uint16_t)((VGA_ROWS - 1) * VGA_COLS + vga_col);
+        outb(0x3D4, 0x0F); outb(0x3D5, (uint8_t)(pos & 0xFF));
+        outb(0x3D4, 0x0E); outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+    }
+}
+
+static void vga_clear(void) {
+    for (int r = 0; r < VGA_HISTORY_ROWS; r++) {
+        for (int c = 0; c < VGA_COLS; c++) {
+            vga_history[r][c] = (uint16_t)((vga_attr << 8) | ' ');
+        }
+    }
+    history_head = 0;
+    vga_col = 0;
+    view_offset = 0;
+    vga_flush();
+}
+
+static void apply_ansi_color(int code) {
+    switch (code) {
+    case 0:  vga_attr = 0x07; break;
+    case 1:  vga_attr |= 0x08; break;
+    case 30: vga_attr = (vga_attr & 0xF0) | 0x00; break;
+    case 31: vga_attr = (vga_attr & 0xF0) | 0x0C; break;
+    case 32: vga_attr = (vga_attr & 0xF0) | 0x0A; break;
+    case 33: vga_attr = (vga_attr & 0xF0) | 0x0E; break;
+    case 34: vga_attr = (vga_attr & 0xF0) | 0x09; break;
+    case 35: vga_attr = (vga_attr & 0xF0) | 0x0D; break;
+    case 36: vga_attr = (vga_attr & 0xF0) | 0x0B; break;
+    case 37: vga_attr = (vga_attr & 0xF0) | 0x0F; break;
+    default: break;
+    }
+}
+
+static void vga_putc(char c) {
+    if (ansi_state == 0) {
+        if (c == '\033') { ansi_state = 1; return; }
+    } else if (ansi_state == 1) {
+        if (c == '[') { ansi_state = 2; ansi_param = 0; return; }
+        ansi_state = 0;
+    } else if (ansi_state == 2) {
+        if (c >= '0' && c <= '9') { ansi_param = ansi_param * 10 + (c - '0'); return; }
+        if (c == ';' || c == 'm') {
+            apply_ansi_color(ansi_param);
+            ansi_param = 0;
+            if (c == 'm') ansi_state = 0;
+            return;
+        }
+        if (c == 'J' || c == 'H') {
+            if (c == 'J') vga_clear();
+            ansi_state = 0;
+            return;
+        }
+        ansi_state = 0;
+        return;
+    }
+
+    if (c == '\n') {
+        vga_col = 0;
+        history_head++;
+        int h = history_head % VGA_HISTORY_ROWS;
+        for (int i = 0; i < VGA_COLS; i++) vga_history[h][i] = (uint16_t)((vga_attr << 8) | ' ');
+        vga_flush();
+        return;
+    }
+    if (c == '\r') {
+        vga_col = 0;
+        vga_flush();
+        return;
+    }
+    if (c == '\b') {
+        if (vga_col > 0) vga_col--;
+        vga_history[history_head % VGA_HISTORY_ROWS][vga_col] = (uint16_t)((vga_attr << 8) | ' ');
+        vga_flush();
+        return;
+    }
+
+    vga_history[history_head % VGA_HISTORY_ROWS][vga_col] = (uint16_t)((vga_attr << 8) | (uint8_t)c);
+    if (++vga_col >= VGA_COLS) {
+        vga_col = 0;
+        history_head++;
+        int h = history_head % VGA_HISTORY_ROWS;
+        for (int i = 0; i < VGA_COLS; i++) vga_history[h][i] = (uint16_t)((vga_attr << 8) | ' ');
+    }
+    vga_flush();
+}
+
 static int extended_key_to_ansi(uint8_t scancode) {
     switch (scancode) {
     case 0x48: pending_bytes[0] = '\033'; pending_bytes[1] = '['; pending_bytes[2] = 'A';
@@ -99,128 +229,40 @@ static int ps2_getc(void) {
     }
     if (extended_pending) {
         extended_pending = 0;
+
+        // INTERCEPTAÇÃO DE SCROLL DO TERMINAL FORA DO AM:
+        // Page Up (0x49) ou Shift + Seta Cima (0x48)
+        if (scancode == 0x49 || (shift_pressed && scancode == 0x48)) {
+            view_offset += 5;
+            vga_flush();
+            return -1; // Não envia tecla pra shell
+        }
+        // Page Down (0x51) ou Shift + Seta Baixo (0x50)
+        if (scancode == 0x51 || (shift_pressed && scancode == 0x50)) {
+            view_offset -= 5;
+            if (view_offset < 0) view_offset = 0;
+            vga_flush();
+            return -1; // Não envia tecla pra shell
+        }
+
         if (console_raw_mode && extended_key_to_ansi(scancode)) {
             pending_pos = 1;
             return (int)(uint8_t)pending_bytes[0];
         }
         return -1;
     }
+
+    // Se o usuário digitou qualquer caractere comum, volta a tela pra visão ao vivo
+    if (view_offset != 0) {
+        view_offset = 0;
+        vga_flush();
+    }
+
     if (scancode < 128) {
         char c = shift_pressed ? scancode_ascii_shift[scancode] : scancode_ascii[scancode];
         if (c) return (int)(uint8_t)c;
     }
     return -1;
-}
-
-#define VGA_COLS 80
-#define VGA_ROWS 25
-#define DEFAULT_ATTR 0x07
-
-static volatile uint16_t *const vga_mem = (volatile uint16_t *)0xB8000;
-static int vga_row;
-static int vga_col;
-static uint8_t vga_attr = DEFAULT_ATTR;
-
-static int ansi_state = 0;
-static int ansi_param = 0;
-
-static void vga_update_cursor(void) {
-    uint16_t pos = (uint16_t)(vga_row * VGA_COLS + vga_col);
-    outb(0x3D4, 0x0F);
-    outb(0x3D5, (uint8_t)(pos & 0xFF));
-    outb(0x3D4, 0x0E);
-    outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
-}
-
-static void vga_scroll(void) {
-    for (int r = 1; r < VGA_ROWS; r++) {
-        for (int c = 0; c < VGA_COLS; c++) {
-            vga_mem[(r - 1) * VGA_COLS + c] = vga_mem[r * VGA_COLS + c];
-        }
-    }
-    for (int c = 0; c < VGA_COLS; c++) {
-        vga_mem[(VGA_ROWS - 1) * VGA_COLS + c] = (uint16_t)((vga_attr << 8) | ' ');
-    }
-    vga_row = VGA_ROWS - 1;
-}
-
-static void vga_clear(void) {
-    for (int i = 0; i < VGA_COLS * VGA_ROWS; i++) {
-        vga_mem[i] = (uint16_t)((vga_attr << 8) | ' ');
-    }
-    vga_row = 0;
-    vga_col = 0;
-    vga_update_cursor();
-}
-
-static void apply_ansi_color(int code) {
-    switch (code) {
-    case 0:  vga_attr = 0x07; break;
-    case 1:  vga_attr |= 0x08; break;
-    case 30: vga_attr = (vga_attr & 0xF0) | 0x00; break;
-    case 31: vga_attr = (vga_attr & 0xF0) | 0x0C; break;
-    case 32: vga_attr = (vga_attr & 0xF0) | 0x0A; break;
-    case 33: vga_attr = (vga_attr & 0xF0) | 0x0E; break;
-    case 34: vga_attr = (vga_attr & 0xF0) | 0x09; break;
-    case 35: vga_attr = (vga_attr & 0xF0) | 0x0D; break;
-    case 36: vga_attr = (vga_attr & 0xF0) | 0x0B; break;
-    case 37: vga_attr = (vga_attr & 0xF0) | 0x0F; break;
-    default: break;
-    }
-}
-
-static void vga_putc(char c) {
-    if (ansi_state == 0) {
-        if (c == '\033') {
-            ansi_state = 1;
-            return;
-        }
-    } else if (ansi_state == 1) {
-        if (c == '[') {
-            ansi_state = 2;
-            ansi_param = 0;
-            return;
-        }
-        ansi_state = 0;
-    } else if (ansi_state == 2) {
-        if (c >= '0' && c <= '9') {
-            ansi_param = ansi_param * 10 + (c - '0');
-            return;
-        }
-        if (c == ';' || c == 'm') {
-            apply_ansi_color(ansi_param);
-            ansi_param = 0;
-            if (c == 'm') {
-                ansi_state = 0;
-            }
-            return;
-        }
-        ansi_state = 0;
-        return;
-    }
-
-    if (c == '\n') {
-        vga_col = 0;
-        if (++vga_row >= VGA_ROWS) {
-            vga_scroll();
-        }
-        vga_update_cursor();
-        return;
-    }
-    if (c == '\r') {
-        vga_col = 0;
-        vga_update_cursor();
-        return;
-    }
-
-    vga_mem[vga_row * VGA_COLS + vga_col] = (uint16_t)((vga_attr << 8) | (uint8_t)c);
-    if (++vga_col >= VGA_COLS) {
-        vga_col = 0;
-        if (++vga_row >= VGA_ROWS) {
-            vga_scroll();
-        }
-    }
-    vga_update_cursor();
 }
 
 void arch_console_init(void) {
