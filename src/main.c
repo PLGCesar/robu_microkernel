@@ -6,6 +6,7 @@
 #include "robu/pmm.h"
 #include "robu/uipc.h"
 #include "robu/kinfo.h"
+#include "robu/signal.h"
 #include "robu/cmdline.h"
 #include "robu/untyped.h"
 #include "robu/dma.h"
@@ -145,6 +146,7 @@ void kmain(void) {
     arch_timer_calibrate();
     arch_timer_percpu_init();
     kinfo_init(lapic_id(), 2);
+    sig_trampoline_init();
     extern uint8_t kstack_top[];
     percpu_init_this_cpu(0, lapic_id(), kstack_top);
     kprintf("\033[33m[smp]\033[0m BSP cpu_id=0 apic_id=%u\n", lapic_id());
@@ -181,6 +183,7 @@ void kmain(void) {
     libctest_init();
     ramfstest_init();
     spawntest_init();
+    sigtest_init();
     consoletest_init();
     toybox_sh_c_init();
 

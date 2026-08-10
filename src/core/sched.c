@@ -8,6 +8,7 @@
 #include "robu/captable.h"
 #include "robu/trace.h"
 #include "robu/pipe.h"
+#include "robu/signal.h"
 #include "percpu.h"
 extern volatile uint32_t ap_joined_flag;
 sched_stats_t sched_stats;
@@ -249,6 +250,16 @@ static void schedule(void) {
     sched_stats.full_scheds++;
     TRACE(TRACE_EVT_CTX_SWITCH, prev->tid, next->tid, 0 , 0, 0, 0);
 }
+static void sched_switch_to(tcb_t *from, tcb_t *to) {
+    if (to != from) {
+        arch_fpu_save(from->fpu_state);
+        arch_fpu_restore(to->fpu_state);
+        if (to->fs_base != from->fs_base) {
+            arch_set_fsbase(to->fs_base);
+        }
+    }
+    arch_vm_activate(to->address_space);
+}
 void sched_resume(void) {
     tcb_t *prev = current_thread;
     if (need_resched[this_cpu()->cpu_id] || current_thread->state != THREAD_STATE_RUNNING) {
@@ -256,15 +267,21 @@ void sched_resume(void) {
         sched_arm_next_deadline();
     }
     tcb_t *next = current_thread;
+    sched_switch_to(prev, next);
 
-    if (next != prev) {
-        arch_fpu_save(prev->fpu_state);
-        arch_fpu_restore(next->fpu_state);
-        if (next->fs_base != prev->fs_base) {
-            arch_set_fsbase(next->fs_base);
+    while (next->address_space != 0 && !next->in_sig_handler
+           && (next->sig_pending & ~next->sig_mask)) {
+        sig_try_deliver(next);
+        if (next->state == THREAD_STATE_RUNNING) {
+            break;
         }
+        schedule();
+        sched_arm_next_deadline();
+        tcb_t *resched_next = current_thread;
+        sched_switch_to(next, resched_next);
+        next = resched_next;
     }
-    arch_vm_activate(next->address_space);
+
     sched_lock_release();
     arch_enter_thread_raw(&next->uctx);
 }
