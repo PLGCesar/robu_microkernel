@@ -4,6 +4,11 @@
 #include "robu/signal.h"
 #include "context.h"
 #include "percpu.h"
+#define SYS_INFO_CAT_SETPGID   11
+#define SYS_INFO_CAT_GETPGID   12
+#define SYS_INFO_CAT_SETSID    13
+#define SYS_INFO_CAT_TCGETPGRP 14
+#define SYS_INFO_CAT_TCSETPGRP 15
 typedef enum {
     THREAD_STATE_RUNNING = 0,
     THREAD_STATE_READY,
@@ -42,6 +47,8 @@ typedef struct tcb {
     tid_t parent_tid;
     tid_t wait_filter;
     uint32_t last_cpu;
+    tid_t pgid;
+    tid_t sid;
     uint64_t sig_pending;
     uint64_t sig_mask;
     sig_action_t sig_actions[ROBU_NSIG];

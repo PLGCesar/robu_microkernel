@@ -97,7 +97,22 @@ static void handle_open(msg_regs_t *m) {
     reply->status = 0;
     reply->handle = (uint64_t)id;
 }
-static void handle_read(msg_regs_t *m) {
+static int console_fg_read_allowed(tid_t from) {
+    msg_regs_t q = (msg_regs_t){0};
+    q.word[0] = SYS_INFO_CAT_TCGETPGRP;
+    robu_ipc_raw(0, 0, IPC_FLAG_SYS_INFO, &q, NULL);
+    tid_t fg = (tid_t)q.word[0];
+    if (fg == 0) {
+        return 1;
+    }
+    q = (msg_regs_t){0};
+    q.word[0] = SYS_INFO_CAT_GETPGID;
+    q.word[1] = from;
+    robu_ipc_raw(0, 0, IPC_FLAG_SYS_INFO, &q, NULL);
+    tid_t caller_pgid = (tid_t)q.word[0];
+    return caller_pgid == fg;
+}
+static void handle_read(msg_regs_t *m, tid_t from) {
     const vfs_read_req_t *req = (const vfs_read_req_t *)m;
     uint64_t handle = req->handle;
     uint64_t len = req->len > VFS_READ_MAX ? VFS_READ_MAX : req->len;
@@ -136,6 +151,10 @@ static void handle_read(msg_regs_t *m) {
         break;
     }
     case DEV_CONSOLE: {
+        if (!console_fg_read_allowed(from)) {
+            reply->status = 0;
+            break;
+        }
         if (console_local_head == console_local_tail) {
             uint8_t kbuf[VFS_READ_MAX];
             int got = devfs_kernel_console_read(kbuf, sizeof(kbuf));
@@ -262,7 +281,7 @@ void _start(void) {
             handle_open(&m);
             break;
         case VFS_OP_READ:
-            handle_read(&m);
+            handle_read(&m, from);
             break;
         case VFS_OP_WRITE:
             handle_write(&m);

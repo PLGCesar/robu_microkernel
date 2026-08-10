@@ -6,6 +6,13 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <termios.h>
+#include <sys/ioctl.h>
+#include <bits/winsize.h>
+#include <unistd.h>
+#define ROBU_TIOCGPGRP 0x540F
+#define ROBU_TIOCSPGRP 0x5410
+#define ROBU_TIOCGWINSZ 0x5413
 
 static void fork_and_pipe_test(void) {
     int fds[2];
@@ -153,6 +160,56 @@ static void sigaction_test(void) {
     printf("sigaction test: after unblock, handler hits=%d (expect 2)\n", sig_handler_hits);
 }
 
+static void termios_pgrp_test(void) {
+    struct termios t;
+    if (tcgetattr(0, &t) != 0) {
+        printf("termios test: tcgetattr failed: %s\n", strerror(errno));
+        return;
+    }
+    printf("termios test: initial ICANON=%d ECHO=%d (expect both 1, cooked by default)\n",
+           (t.c_lflag & ICANON) != 0, (t.c_lflag & ECHO) != 0);
+
+    t.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
+    if (tcsetattr(0, TCSANOW, &t) != 0) {
+        printf("termios test: tcsetattr(raw) failed: %s\n", strerror(errno));
+        return;
+    }
+    struct termios t2;
+    tcgetattr(0, &t2);
+    printf("termios test: after raw tcsetattr, ICANON=%d (expect 0)\n", (t2.c_lflag & ICANON) != 0);
+
+    t.c_lflag |= ICANON | ECHO;
+    tcsetattr(0, TCSANOW, &t);
+    tcgetattr(0, &t2);
+    printf("termios test: after restoring cooked, ICANON=%d (expect 1)\n", (t2.c_lflag & ICANON) != 0);
+
+    struct winsize ws;
+    memset(&ws, 0, sizeof(ws));
+    if (ioctl(0, ROBU_TIOCGWINSZ, &ws) != 0) {
+        printf("termios test: ioctl(TIOCGWINSZ) failed: %s\n", strerror(errno));
+    } else {
+        printf("termios test: winsize row=%d col=%d (expect 25x80)\n", ws.ws_row, ws.ws_col);
+    }
+
+    pid_t me = getpid();
+    if (setpgid(0, 0) != 0) {
+        printf("pgid test: setpgid failed: %s\n", strerror(errno));
+    }
+    pid_t pg = getpgid(0);
+    printf("pgid test: getpgid=%d self=%d (expect equal)\n", (int)pg, (int)me);
+
+    pid_t sid = setsid();
+    printf("sid test: setsid returned %d self=%d (expect equal)\n", (int)sid, (int)me);
+
+    int fg_arg = (int)me;
+    if (ioctl(0, ROBU_TIOCSPGRP, &fg_arg) != 0) {
+        printf("pgrp test: ioctl(TIOCSPGRP) failed: %s\n", strerror(errno));
+    }
+    int fg_read = -1;
+    ioctl(0, ROBU_TIOCGPGRP, &fg_read);
+    printf("pgrp test: tcgetpgrp=%d self=%d (expect equal)\n", fg_read, (int)me);
+}
+
 int main(int argc, char **argv) {
     printf("hello from mlibc on robu\n");
     for (int i = 0; i < argc; i++) {
@@ -206,6 +263,7 @@ int main(int argc, char **argv) {
     spawn_pipeline_test();
     exec_test();
     sigaction_test();
+    termios_pgrp_test();
 
     printf("mlibc-hello: all checks done\n");
     return 0;

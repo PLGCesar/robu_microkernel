@@ -212,6 +212,8 @@ int spawn_fork_create(tcb_t *caller, tid_t *out_tid) {
         return IPC_ERR_NO_MEM;
     }
     child->parent_tid = caller->tid;
+    child->pgid = caller->pgid;
+    child->sid = caller->sid;
     pipe_inherit_fork(caller->tid, child->tid);
     child->uctx.rax = (uint64_t)IPC_ERR_NONE;
     child->uctx.r8 = 0;

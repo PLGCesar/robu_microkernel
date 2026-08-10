@@ -16,6 +16,7 @@ static tid_t console_writer_tid = 0;
 void ipc_grant_console_writer(tid_t tid) {
     console_writer_tid = tid;
 }
+static tid_t console_fg_pgid = 0;
 static tid_t blk_owner_tid = 0;
 void ipc_grant_blk_owner(tid_t tid) {
     blk_owner_tid = tid;
@@ -600,7 +601,50 @@ void sys_ipc(void) {
                 f->r8 = cur->sig_pending;
                 f->rax = (uint64_t)IPC_ERR_NONE;
             } else if (category == SYS_INFO_CAT_CONSOLE_MODE) {
-                arch_console_set_raw_mode((int)f->r9);
+                if (f->r9 == 2) {
+                    f->r8 = (uint64_t)arch_console_get_raw_mode();
+                } else {
+                    arch_console_set_raw_mode((int)f->r9);
+                }
+                f->rax = (uint64_t)IPC_ERR_NONE;
+            } else if (category == SYS_INFO_CAT_SETPGID) {
+                tid_t target = (tid_t)f->r9;
+                tid_t new_pgid = (tid_t)f->r10;
+                if (target == 0) {
+                    target = cur->tid;
+                }
+                if (new_pgid == 0) {
+                    new_pgid = target;
+                }
+                tcb_t *t = sched_get_tcb(target);
+                if (!t) {
+                    f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+                } else {
+                    t->pgid = new_pgid;
+                    f->rax = (uint64_t)IPC_ERR_NONE;
+                }
+            } else if (category == SYS_INFO_CAT_GETPGID) {
+                tid_t target = (tid_t)f->r9;
+                if (target == 0) {
+                    target = cur->tid;
+                }
+                tcb_t *t = sched_get_tcb(target);
+                if (!t) {
+                    f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+                } else {
+                    f->r8 = (uint64_t)t->pgid;
+                    f->rax = (uint64_t)IPC_ERR_NONE;
+                }
+            } else if (category == SYS_INFO_CAT_SETSID) {
+                cur->sid = cur->tid;
+                cur->pgid = cur->tid;
+                f->r8 = (uint64_t)cur->sid;
+                f->rax = (uint64_t)IPC_ERR_NONE;
+            } else if (category == SYS_INFO_CAT_TCGETPGRP) {
+                f->r8 = (uint64_t)console_fg_pgid;
+                f->rax = (uint64_t)IPC_ERR_NONE;
+            } else if (category == SYS_INFO_CAT_TCSETPGRP) {
+                console_fg_pgid = (tid_t)f->r9;
                 f->rax = (uint64_t)IPC_ERR_NONE;
             } else {
                 f->rax = (uint64_t)IPC_ERR_NOT_FOUND;

@@ -11,5 +11,6 @@ int arch_console_getc(void);
 void arch_console_line_feed(int c);
 int arch_console_read_line_bytes(uint8_t *out, int max);
 void arch_console_set_raw_mode(int enable);
+int arch_console_get_raw_mode(void);
 #define SYS_INFO_CAT_CONSOLE_MODE 10
 #endif
