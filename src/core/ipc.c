@@ -11,6 +11,7 @@
 #include "robu/rootfs.h"
 #include "robu/virtio_blk.h"
 #include "robu/arch.h"
+#include "robu/signal.h"
 static tid_t console_writer_tid = 0;
 void ipc_grant_console_writer(tid_t tid) {
     console_writer_tid = tid;
@@ -550,6 +551,51 @@ void sys_ipc(void) {
             } else if (category == 4) {
                 kprintf("[power] shutting down\n");
                 arch_shutdown();
+            } else if (category == SYS_INFO_CAT_SIGACTION) {
+                int signum = (int)f->r9;
+                int do_set = (int)f->r13;
+                uint64_t new_handler = f->r10;
+                uint64_t new_flags = f->r12;
+                uint64_t new_mask = f->r14;
+                if (signum < 1 || signum >= ROBU_NSIG) {
+                    f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+                } else {
+                    sig_action_t *sa = &cur->sig_actions[signum];
+                    f->r8 = sa->handler;
+                    f->r9 = sa->flags;
+                    f->r10 = sa->mask;
+                    if (do_set) {
+                        sa->handler = new_handler;
+                        sa->flags = new_flags;
+                        sa->mask = new_mask;
+                    }
+                    f->rax = (uint64_t)IPC_ERR_NONE;
+                }
+            } else if (category == SYS_INFO_CAT_KILL) {
+                tid_t target = (tid_t)f->r9;
+                int signum = (int)f->r10;
+                f->rax = (uint64_t)(sig_send(target, signum) == 0
+                                     ? IPC_ERR_NONE : IPC_ERR_NOT_FOUND);
+            } else if (category == SYS_INFO_CAT_SIGPROCMASK) {
+                uint64_t how = f->r9;
+                uint64_t new_mask = f->r10;
+                int do_set = (int)f->r12;
+                f->r8 = cur->sig_mask;
+                if (do_set) {
+                    if (how == SIG_BLOCK) {
+                        cur->sig_mask |= new_mask;
+                    } else if (how == SIG_UNBLOCK) {
+                        cur->sig_mask &= ~new_mask;
+                    } else {
+                        cur->sig_mask = new_mask;
+                    }
+                }
+                f->rax = (uint64_t)IPC_ERR_NONE;
+            } else if (category == SYS_INFO_CAT_SIGRETURN) {
+                *f = cur->saved_uctx_before_sig;
+                cur->sig_mask = cur->saved_sig_mask;
+                cur->in_sig_handler = 0;
+                return;
             } else {
                 f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
             }

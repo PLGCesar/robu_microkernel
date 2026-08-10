@@ -122,6 +122,10 @@ static void test_report_entry(void) {
             kprintf("[spawn-test] %lu/%lu checks passed (fail bitmask=0x%lx)\n",
                     m.word[2], m.word[1], m.word[3]);
             break;
+        case TEST_REPORT_KIND_SIGNAL_TEST:
+            kprintf("[signal-test] %lu/%lu checks passed (fail bitmask=0x%lx)\n",
+                    m.word[2], m.word[1], m.word[3]);
+            break;
         default:
             kprintf("[test-report] unknown report kind=%lu from tid=%u\n", m.word[0], from);
             break;
@@ -305,6 +309,13 @@ void spawntest_init(void) {
         return;
     }
     toybox_spawn("spawntest", 1, (const char *const[]){ "spawntest" }, 9);
+}
+
+void sigtest_init(void) {
+    if (!cmdline_get("sigtest")) {
+        return;
+    }
+    toybox_spawn("sigtest", 1, (const char *const[]){ "sigtest" }, 9);
 }
 
 void consoletest_init(void) {

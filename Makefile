@@ -148,6 +148,14 @@ $(APPS_BUILD_DIR)/powertools/shutdown: $(APPS_BUILD_DIR)/powertools/shutdown.c.o
 	$(LD) $(APP_LDFLAGS) -T apps/link/shutdown.ld -e _start -o $@ \
 	    $(APPS_BUILD_DIR)/powertools/shutdown.c.o
 
+$(APPS_BUILD_DIR)/sigtest/sigtest.c.o: apps/sigtest/sigtest.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(APPS_BUILD_DIR)/sigtest/sigtest: $(APPS_BUILD_DIR)/sigtest/sigtest.c.o apps/link/sigtest.ld
+	$(LD) $(APP_LDFLAGS) -T apps/link/sigtest.ld -e _start -o $@ \
+	    $(APPS_BUILD_DIR)/sigtest/sigtest.c.o
+
 MLIBC_DIR := apps/mlibc
 MLIBC_BUILD_DIR := $(BUILD_DIR)/mlibc
 MLIBC_SYSROOT := $(abspath $(BUILD_DIR)/mlibc-sysroot)
@@ -271,6 +279,7 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
                          $(APPS_BUILD_DIR)/powertools/reboot \
                          $(APPS_BUILD_DIR)/powertools/halt \
                          $(APPS_BUILD_DIR)/powertools/shutdown \
+                         $(APPS_BUILD_DIR)/sigtest/sigtest \
                          $(APPS_BUILD_DIR)/hello_initsys/hello_initsys \
                          $(APPS_BUILD_DIR)/minibox/minibox \
                          $(APPS_BUILD_DIR)/sh/sh \
@@ -288,6 +297,7 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
 	cp $(APPS_BUILD_DIR)/powertools/reboot $(ROOTFS_STAGE)/reboot
 	cp $(APPS_BUILD_DIR)/powertools/halt $(ROOTFS_STAGE)/halt
 	cp $(APPS_BUILD_DIR)/powertools/shutdown $(ROOTFS_STAGE)/shutdown
+	cp $(APPS_BUILD_DIR)/sigtest/sigtest $(ROOTFS_STAGE)/sigtest
 	cp $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(ROOTFS_STAGE)/hello_initsys
 	cp apps/hello_initsys/rc.conf $(ROOTFS_STAGE)/rc.conf
 	cp $(APPS_BUILD_DIR)/minibox/minibox $(ROOTFS_STAGE)/minibox

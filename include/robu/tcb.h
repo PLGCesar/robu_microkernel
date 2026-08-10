@@ -1,6 +1,7 @@
 #ifndef ROBU_TCB_H
 #define ROBU_TCB_H
 #include "robu/types.h"
+#include "robu/signal.h"
 #include "context.h"
 #include "percpu.h"
 typedef enum {
@@ -41,6 +42,12 @@ typedef struct tcb {
     tid_t parent_tid;
     tid_t wait_filter;
     uint32_t last_cpu;
+    uint64_t sig_pending;
+    uint64_t sig_mask;
+    sig_action_t sig_actions[ROBU_NSIG];
+    int in_sig_handler;
+    arch_uctx_t saved_uctx_before_sig;
+    uint64_t saved_sig_mask;
     struct tcb *rq_next;
     struct tcb *sq_next;
     struct tcb *inbox_next;

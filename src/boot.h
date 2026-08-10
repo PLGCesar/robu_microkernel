@@ -57,6 +57,7 @@ void libctest_init(void);
 void ramfstest_init(void);
 void spawntest_init(void);
 void consoletest_init(void);
+void sigtest_init(void);
 void toybox_sh_c_init(void);
 tid_t test_report_init(void);
 
