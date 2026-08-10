@@ -10,4 +10,6 @@ void arch_console_putc(char c);
 int arch_console_getc(void);
 void arch_console_line_feed(int c);
 int arch_console_read_line_bytes(uint8_t *out, int max);
+void arch_console_set_raw_mode(int enable);
+#define SYS_INFO_CAT_CONSOLE_MODE 10
 #endif

@@ -156,6 +156,14 @@ $(APPS_BUILD_DIR)/sigtest/sigtest: $(APPS_BUILD_DIR)/sigtest/sigtest.c.o apps/li
 	$(LD) $(APP_LDFLAGS) -T apps/link/sigtest.ld -e _start -o $@ \
 	    $(APPS_BUILD_DIR)/sigtest/sigtest.c.o
 
+$(APPS_BUILD_DIR)/consoletest/consoletest.c.o: apps/consoletest/consoletest.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(APPS_BUILD_DIR)/consoletest/consoletest: $(APPS_BUILD_DIR)/consoletest/consoletest.c.o apps/link/consoletest.ld
+	$(LD) $(APP_LDFLAGS) -T apps/link/consoletest.ld -e _start -o $@ \
+	    $(APPS_BUILD_DIR)/consoletest/consoletest.c.o
+
 MLIBC_DIR := apps/mlibc
 MLIBC_BUILD_DIR := $(BUILD_DIR)/mlibc
 MLIBC_SYSROOT := $(abspath $(BUILD_DIR)/mlibc-sysroot)
@@ -280,6 +288,7 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
                          $(APPS_BUILD_DIR)/powertools/halt \
                          $(APPS_BUILD_DIR)/powertools/shutdown \
                          $(APPS_BUILD_DIR)/sigtest/sigtest \
+                         $(APPS_BUILD_DIR)/consoletest/consoletest \
                          $(APPS_BUILD_DIR)/mlibc-hello/hello \
                          $(APPS_BUILD_DIR)/hello_initsys/hello_initsys \
                          $(APPS_BUILD_DIR)/minibox/minibox \
@@ -299,6 +308,7 @@ $(BUILD_DIR)/rootfs.tar: $(APPS_BUILD_DIR)/devfs/devfs $(APPS_BUILD_DIR)/ramfs/r
 	cp $(APPS_BUILD_DIR)/powertools/halt $(ROOTFS_STAGE)/halt
 	cp $(APPS_BUILD_DIR)/powertools/shutdown $(ROOTFS_STAGE)/shutdown
 	cp $(APPS_BUILD_DIR)/sigtest/sigtest $(ROOTFS_STAGE)/sigtest
+	cp $(APPS_BUILD_DIR)/consoletest/consoletest $(ROOTFS_STAGE)/consoletest
 	cp $(APPS_BUILD_DIR)/mlibc-hello/hello $(ROOTFS_STAGE)/mlibc-hello
 	cp $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(ROOTFS_STAGE)/hello_initsys
 	cp apps/hello_initsys/rc.conf $(ROOTFS_STAGE)/rc.conf
