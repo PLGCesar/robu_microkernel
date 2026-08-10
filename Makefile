@@ -359,12 +359,13 @@ run: $(BUILD_DIR)/robu_kernel.iso
 APP_BINS := $(APPS_BUILD_DIR)/procfs/procfs $(APPS_BUILD_DIR)/sysfs/sysfs \
             $(APPS_BUILD_DIR)/hello_initsys/hello_initsys $(APPS_BUILD_DIR)/minibox/minibox \
 
-# --- TUI AM BUILD RULES ---
-$(APPS_BUILD_DIR)/am/am.c.o: apps/am/am.c mlibc
+
+# --- TUI AM BUILD RULES (NATIVE FREESTANDING) ---
+$(APPS_BUILD_DIR)/am/am.c.o: apps/am/am.c
 	@mkdir -p $(@D)
-	$(CC) $(MLIBC_APP_CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 $(APPS_BUILD_DIR)/am/am: $(APPS_BUILD_DIR)/am/am.c.o apps/link/am.ld
-	ld.lld -nostdlib -static -T apps/link/am.ld -e _start -o $@ \
-	    $(MLIBC_CRT_OBJS) $(APPS_BUILD_DIR)/am/am.c.o $(MLIBC_LIBS)
+	$(LD) $(APP_LDFLAGS) -T apps/link/am.ld -e _start -o $@ \
+	    $(APPS_BUILD_DIR)/am/am.c.o
 	$(STRIP) --strip-all $@
