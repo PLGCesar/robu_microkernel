@@ -599,6 +599,9 @@ void sys_ipc(void) {
             } else if (category == SYS_INFO_CAT_SIGPENDING) {
                 f->r8 = cur->sig_pending;
                 f->rax = (uint64_t)IPC_ERR_NONE;
+            } else if (category == SYS_INFO_CAT_CONSOLE_MODE) {
+                arch_console_set_raw_mode((int)f->r9);
+                f->rax = (uint64_t)IPC_ERR_NONE;
             } else {
                 f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
             }

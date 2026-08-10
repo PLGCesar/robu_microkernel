@@ -43,21 +43,66 @@ static const char scancode_ascii_shift[128] = {
 };
 
 static int shift_pressed = 0;
+static int extended_pending = 0;
+static int console_raw_mode = 0;
+static char pending_bytes[4];
+static int pending_len = 0;
+static int pending_pos = 0;
+
+static int extended_key_to_ansi(uint8_t scancode) {
+    switch (scancode) {
+    case 0x48: pending_bytes[0] = '\033'; pending_bytes[1] = '['; pending_bytes[2] = 'A';
+               pending_len = 3; return 1;
+    case 0x50: pending_bytes[0] = '\033'; pending_bytes[1] = '['; pending_bytes[2] = 'B';
+               pending_len = 3; return 1;
+    case 0x4D: pending_bytes[0] = '\033'; pending_bytes[1] = '['; pending_bytes[2] = 'C';
+               pending_len = 3; return 1;
+    case 0x4B: pending_bytes[0] = '\033'; pending_bytes[1] = '['; pending_bytes[2] = 'D';
+               pending_len = 3; return 1;
+    case 0x47: pending_bytes[0] = '\033'; pending_bytes[1] = '['; pending_bytes[2] = 'H';
+               pending_len = 3; return 1;
+    case 0x4F: pending_bytes[0] = '\033'; pending_bytes[1] = '['; pending_bytes[2] = 'F';
+               pending_len = 3; return 1;
+    case 0x53: pending_bytes[0] = '\033'; pending_bytes[1] = '['; pending_bytes[2] = '3';
+               pending_bytes[3] = '~'; pending_len = 4; return 1;
+    default: return 0;
+    }
+}
 
 static int ps2_getc(void) {
+    if (pending_pos < pending_len) {
+        return (int)(uint8_t)pending_bytes[pending_pos++];
+    }
+    pending_len = 0;
+    pending_pos = 0;
     if (!(inb(0x64) & 0x01)) {
         return -1;
     }
     uint8_t scancode = inb(0x60);
+    if (scancode == 0xE0) {
+        extended_pending = 1;
+        return -1;
+    }
     if (scancode == 0x2A || scancode == 0x36) {
+        extended_pending = 0;
         shift_pressed = 1;
         return -1;
     }
     if (scancode == 0xAA || scancode == 0xB6) {
+        extended_pending = 0;
         shift_pressed = 0;
         return -1;
     }
     if (scancode & 0x80) {
+        extended_pending = 0;
+        return -1;
+    }
+    if (extended_pending) {
+        extended_pending = 0;
+        if (console_raw_mode && extended_key_to_ansi(scancode)) {
+            pending_pos = 1;
+            return (int)(uint8_t)pending_bytes[0];
+        }
         return -1;
     }
     if (scancode < 128) {
@@ -214,7 +259,17 @@ static void ring_push_locked(char c) {
     ring_head = next;
 }
 
+void arch_console_set_raw_mode(int enable) {
+    console_raw_mode = enable ? 1 : 0;
+}
+
 void arch_console_line_feed(int c) {
+    if (console_raw_mode) {
+        spin_lock(&console_ring_lock);
+        ring_push_locked((char)c);
+        spin_unlock(&console_ring_lock);
+        return;
+    }
     if (c == '\b' || c == 0x7F) {
         if (line_len > 0) {
             line_len--;

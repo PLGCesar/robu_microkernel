@@ -126,6 +126,10 @@ static void test_report_entry(void) {
             kprintf("[signal-test] %lu/%lu checks passed (fail bitmask=0x%lx)\n",
                     m.word[2], m.word[1], m.word[3]);
             break;
+        case TEST_REPORT_KIND_CONSOLE_TEST:
+            kprintf("[console-test] %lu/%lu checks passed (fail bitmask=0x%lx)\n",
+                    m.word[2], m.word[1], m.word[3]);
+            break;
         default:
             kprintf("[test-report] unknown report kind=%lu from tid=%u\n", m.word[0], from);
             break;
