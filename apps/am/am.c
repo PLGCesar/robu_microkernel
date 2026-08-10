@@ -6,6 +6,19 @@
 #include <unistd.h>
 #include <termios.h>
 
+// --- SYSCALL NATIVA DO ROBU MICROKERNEL ---
+// Fala direto com a int $0x30 do Kernel sem passar por futexes do Linux/mlibc
+static inline void robu_sleep(unsigned long ticks) {
+    register unsigned long rdi asm("rdi") = 0;
+    register unsigned long rsi asm("rsi") = ticks;
+    register unsigned long rdx asm("rdx") = 0;
+    long status;
+    asm volatile("int $0x30"
+                 : "=a"(status)
+                 : "r"(rdi), "r"(rsi), "r"(rdx)
+                 : "r8", "r9", "r10", "r11", "r12", "r13", "r14", "rcx", "memory", "cc");
+}
+
 #define MAX_ENTRIES 128
 
 typedef struct {
@@ -23,13 +36,12 @@ int main() {
 
     char path[1024] = "/";
     int selected = 0;
-    int dirty = 1; // Só redesenha quando houver alteração!
+    int dirty = 1;
 
     entry_t entries[MAX_ENTRIES];
     int count = 0;
 
     while(1) {
-        // RENDERIZAÇÃO INTELIGENTE: Só lê o VFS e desenha se algo mudou
         if (dirty) {
             count = 0;
             DIR *d = opendir(path);
@@ -77,7 +89,7 @@ int main() {
 
             if (selected >= count) selected = count > 0 ? count - 1 : 0;
 
-            // Desenha a Interface
+            // Renderiza a interface
             printf("\033[2J\033[H");
             printf("\033[44;37;1m --- Robu OS TUI File Manager --- \033[0m\n");
             printf("\033[36m Path:\033[0m %s\n", path);
@@ -101,14 +113,14 @@ int main() {
             printf("----------------------------------------\n");
             printf("[w/s] Navegar   [ENTER] Abrir   [q] Sair\n");
             fflush(stdout);
-            dirty = 0; // Trava o redesenho até a próxima tecla!
+            dirty = 0;
         }
 
         int c = getchar();
-        
-        // CESSÃO DE CPU: Se nenhuma tecla foi pressionada, dorme 20ms e libera o microkernel!
+
+        // Dorme 1 tick no Kernel nativo caso não haja tecla pressionada
         if (c == EOF || c <= 0) {
-            usleep(20000); 
+            robu_sleep(1);
             continue;
         }
 
@@ -120,8 +132,8 @@ int main() {
         else if (c == 's' || c == 'S') {
             if (selected < count - 1) { selected++; dirty = 1; }
         }
-        else if (c == 27) { // Setas ANSI (\033[A e \033[B)
-            usleep(1000);
+        else if (c == 27) { // Tratamento de Setas
+            robu_sleep(1);
             int c2 = getchar();
             if (c2 == '[') {
                 int c3 = getchar();
@@ -143,12 +155,12 @@ int main() {
                     selected = 0;
                     dirty = 1;
                 } else {
-                    // Prévia de Arquivo
+                    // Visualizador de arquivos
                     printf("\033[2J\033[H\033[33m--- Lendo: %s ---\033[0m\n\n", entries[selected].name);
                     char full[2048];
                     if (strcmp(path, "/") == 0) snprintf(full, sizeof(full), "/%s", entries[selected].name);
                     else snprintf(full, sizeof(full), "%s/%s", path, entries[selected].name);
-                    
+
                     FILE *f = fopen(full, "r");
                     if (f) {
                         char buf[128];
@@ -167,7 +179,7 @@ int main() {
                     while (1) {
                         int k = getchar();
                         if (k != EOF && k > 0) break;
-                        usleep(20000);
+                        robu_sleep(1);
                     }
                     dirty = 1;
                 }
