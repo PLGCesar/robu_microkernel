@@ -77,7 +77,6 @@ static void update_cursor(void) {
     }
 }
 
-/* Atomic 128-bit MMIO transfer from RAM framebuffer to 0xB8000 hardware memory */
 static void render_screen(void) {
     if (view_offset == 0) {
         volatile uint128_t *dst128 = (volatile uint128_t *)vga_mem;
@@ -204,6 +203,14 @@ static void vga_putc(char c) {
             if (c == 'm') ansi_state = 0;
             return;
         }
+        /* IMPLEMENTAÇÃO DE \033[K (Erase from Cursor to End of Line) */
+        if (c == 'K') {
+            for (int col = live_col; col < VGA_COLS; col++) {
+                live_screen[live_row][col] = (uint16_t)((vga_attr << 8) | ' ');
+            }
+            ansi_state = 0;
+            return;
+        }
         if (c == 'J' || c == 'H') {
             if (c == 'J') vga_clear();
             else if (c == 'H') { live_row = 0; live_col = 0; }
@@ -231,7 +238,6 @@ static void vga_putc(char c) {
         return;
     }
 
-    /* Writes exclusively to RAM framebuffer. Hardware MMIO 0xB8000 is untouched here! */
     live_screen[live_row][live_col] = (uint16_t)((vga_attr << 8) | (uint8_t)c);
 
     if (++live_col >= VGA_COLS) {
@@ -330,10 +336,13 @@ void arch_console_init(void) {
 }
 
 void arch_console_putc(char c) {
-    if (c == '\n') {
-        serial_putc('\r');
+    /* Suprime a inundação do log serial quando um app TUI está ativo */
+    if (!console_raw_mode) {
+        if (c == '\n') {
+            serial_putc('\r');
+        }
+        serial_putc(c);
     }
-    serial_putc(c);
     vga_putc(c);
 }
 
