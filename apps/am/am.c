@@ -1,194 +1,260 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <dirent.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <termios.h>
+#include "robu/types.h"
+#include "robu/uipc.h"
+#include "robu/ipc.h"
+#include "robu/kinfo.h"
+#include "robu/vfs.h"
 
-// --- SYSCALL NATIVA DO ROBU MICROKERNEL ---
-// Fala direto com a int $0x30 do Kernel sem passar por futexes do Linux/mlibc
-static inline void robu_sleep(unsigned long ticks) {
-    register unsigned long rdi asm("rdi") = 0;
-    register unsigned long rsi asm("rsi") = ticks;
-    register unsigned long rdx asm("rdx") = 0;
-    long status;
-    asm volatile("int $0x30"
-                 : "=a"(status)
-                 : "r"(rdi), "r"(rsi), "r"(rdx)
-                 : "r8", "r9", "r10", "r11", "r12", "r13", "r14", "rcx", "memory", "cc");
+static tid_t devfs_tid = 0;
+static int64_t console_h = -1;
+
+// --- AJUDANTES DE STRING E TTY NATIVOS ---
+static int str_eq(const char *a, const char *b) {
+    int i = 0;
+    while (a[i] && b[i]) {
+        if (a[i] != b[i]) return 0;
+        i++;
+    }
+    return a[i] == b[i];
 }
 
-#define MAX_ENTRIES 128
+static void str_copy(char *dst, const char *src, int max) {
+    int i = 0;
+    for (; i < max - 1 && src[i]; i++) dst[i] = src[i];
+    dst[i] = '\0';
+}
 
+static void str_cat(char *dst, const char *src, int max) {
+    int d = 0;
+    while (dst[d] && d < max - 1) d++;
+    int s = 0;
+    while (src[s] && d < max - 1) dst[d++] = src[s++];
+    dst[d] = '\0';
+}
+
+static int str_len(const char *s) {
+    int l = 0;
+    while (s[l]) l++;
+    return l;
+}
+
+static void print_str(const char *s) {
+    uint64_t len = (uint64_t)str_len(s);
+    if (len > 0 && console_h >= 0) {
+        vfs_write(devfs_tid, (uint64_t)console_h, s, len);
+    }
+}
+
+static void print_num(uint64_t n) {
+    if (n == 0) { print_str("0"); return; }
+    char buf[24], rev[24];
+    int r = 0, p = 0;
+    while (n > 0) { rev[r++] = '0' + (n % 10); n /= 10; }
+    while (r > 0) buf[p++] = rev[--r];
+    buf[p] = '\0';
+    print_str(buf);
+}
+
+static void set_raw_mode(int enable) {
+    msg_regs_t m = (msg_regs_t){0};
+    m.word[0] = 10; // SYS_INFO_CAT_CONSOLE_MODE
+    m.word[1] = enable ? 1 : 0;
+    robu_ipc_raw(0, 0, IPC_FLAG_SYS_INFO, &m, NULL);
+}
+
+static int read_key(void) {
+    uint8_t c;
+    int64_t n = vfs_read(devfs_tid, (uint64_t)console_h, &c, 1);
+    if (n > 0) return (int)c;
+    return -1;
+}
+
+// --- ESTRUTURA DO NAVEGADOR ---
+#define MAX_ENTRIES 64
 typedef struct {
-    char name[256];
+    char name[VFS_NAME_MAX];
     int is_dir;
-    off_t size;
 } entry_t;
 
-int main() {
-    struct termios oldt, newt;
-    tcgetattr(STDIN_FILENO, &oldt);
-    newt = oldt;
-    newt.c_lflag &= ~(ICANON | ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+static entry_t entries[MAX_ENTRIES];
+static int entry_count = 0;
 
-    char path[1024] = "/";
+static void go_parent(char *path) {
+    int len = str_len(path);
+    if (len <= 1) return;
+    if (path[len - 1] == '/') path[--len] = '\0';
+    int last_slash = -1;
+    for (int i = 0; i < len; i++) {
+        if (path[i] == '/') last_slash = i;
+    }
+    if (last_slash <= 0) {
+        path[0] = '/'; path[1] = '\0';
+    } else {
+        path[last_slash] = '\0';
+    }
+}
+
+static void load_dir(const char *path) {
+    entry_count = 0;
+    int matched_len = 0;
+    const volatile kinfo_page_t *k = kinfo_user();
+    tid_t server = kinfo_resolve_mount(k, path, &matched_len);
+    if (server == 0) return;
+
+    const char *rel = path + matched_len;
+
+    uint64_t size, ino = 0;
+    int is_dir = 0;
+    int64_t st = vfs_stat(server, rel, &size, &is_dir, &ino);
+    if (st != 0 || ino == 0) {
+        ino = VFS_ROOT_INO;
+    }
+
+    if (!str_eq(path, "/")) {
+        str_copy(entries[entry_count].name, "..", VFS_NAME_MAX);
+        entries[entry_count].is_dir = 1;
+        entry_count++;
+    }
+
+    for (uint64_t idx = 0; idx < MAX_ENTRIES - 1; idx++) {
+        char name_buf[VFS_NAME_MAX];
+        int item_is_dir = 0;
+        int64_t rc = vfs_readdir(server, ino, idx, name_buf, &item_is_dir);
+        if (rc != 0) break;
+
+        if (str_eq(name_buf, ".") || str_eq(name_buf, "..")) continue;
+
+        str_copy(entries[entry_count].name, name_buf, VFS_NAME_MAX);
+        entries[entry_count].is_dir = item_is_dir;
+        entry_count++;
+    }
+}
+
+static void preview_file(const char *path, const char *filename) {
+    print_str("\033[2J\033[H\033[33m--- Content of ");
+    print_str(filename);
+    print_str(" ---\033[0m\r\n\r\n");
+
+    char full[VFS_PATH_MAX];
+    str_copy(full, path, sizeof(full));
+    if (full[str_len(full) - 1] != '/') str_cat(full, "/", sizeof(full));
+    str_cat(full, filename, sizeof(full));
+
+    int matched_len = 0;
+    tid_t server = kinfo_resolve_mount(kinfo_user(), full, &matched_len);
+    if (server != 0) {
+        int64_t h = vfs_open(server, full + matched_len, 0);
+        if (h >= 0) {
+            uint8_t buf[256];
+            int64_t n = vfs_read(server, (uint64_t)h, buf, sizeof(buf) - 1);
+            if (n > 0) {
+                buf[n] = '\0';
+                print_str((char*)buf);
+            } else {
+                print_str("(Empty or unreadable file)\r\n");
+            }
+            vfs_close(server, (uint64_t)h);
+        } else {
+            print_str("(Could not open file)\r\n");
+        }
+    }
+
+    print_str("\r\n\r\n\033[47;30m [ Press any key to return ] \033[0m\r\n");
+
+    while (1) {
+        int k = read_key();
+        if (k >= 0) break;
+        ipc_sleep(1);
+    }
+}
+
+// --- PONTO DE ENTRADA NATIVO (_start) ---
+void _start(void) {
+    devfs_tid = (tid_t)kinfo_user()->devfs_tid;
+    console_h = vfs_open(devfs_tid, "console", 0);
+    if (console_h < 0) ipc_exit(1);
+
+    set_raw_mode(1);
+
+    char path[VFS_PATH_MAX] = "/";
     int selected = 0;
     int dirty = 1;
 
-    entry_t entries[MAX_ENTRIES];
-    int count = 0;
-
-    while(1) {
+    while (1) {
         if (dirty) {
-            count = 0;
-            DIR *d = opendir(path);
-            if (d) {
-                struct dirent *dir;
-                while ((dir = readdir(d)) != NULL && count < MAX_ENTRIES) {
-                    if (strcmp(dir->d_name, ".") == 0) continue;
-                    if (strcmp(path, "/") == 0 && strcmp(dir->d_name, "..") == 0) continue;
+            load_dir(path);
+            if (selected >= entry_count) selected = entry_count > 0 ? entry_count - 1 : 0;
 
-                    strcpy(entries[count].name, dir->d_name);
+            print_str("\033[2J\033[H");
+            print_str("\033[44;37;1m --- Robu Native TUI File Manager --- \033[0m\r\n");
+            print_str("\033[36m Path:\033[0m ");
+            print_str(path);
+            print_str("\r\n----------------------------------------\r\n");
 
-                    char full[2048];
-                    if (strcmp(path, "/") == 0) snprintf(full, sizeof(full), "/%s", dir->d_name);
-                    else snprintf(full, sizeof(full), "%s/%s", path, dir->d_name);
-
-                    struct stat st;
-                    if (stat(full, &st) == 0) {
-                        entries[count].is_dir = S_ISDIR(st.st_mode);
-                        entries[count].size = st.st_size;
-                    } else {
-                        entries[count].is_dir = 0;
-                        entries[count].size = 0;
-                    }
-                    count++;
-                }
-                closedir(d);
-            }
-
-            // Ordenação: Diretórios primeiro
-            for (int i = 0; i < count - 1; i++) {
-                for (int j = i + 1; j < count; j++) {
-                    int swap = 0;
-                    if (entries[i].is_dir != entries[j].is_dir) {
-                        swap = entries[j].is_dir;
-                    } else {
-                        swap = strcmp(entries[i].name, entries[j].name) > 0;
-                    }
-                    if (swap) {
-                        entry_t tmp = entries[i];
-                        entries[i] = entries[j];
-                        entries[j] = tmp;
-                    }
-                }
-            }
-
-            if (selected >= count) selected = count > 0 ? count - 1 : 0;
-
-            // Renderiza a interface
-            printf("\033[2J\033[H");
-            printf("\033[44;37;1m --- Robu OS TUI File Manager --- \033[0m\n");
-            printf("\033[36m Path:\033[0m %s\n", path);
-            printf("----------------------------------------\n");
-
-            if (count == 0) {
-                printf("  (Diretório Vazio)\n");
+            if (entry_count == 0) {
+                print_str("  (Empty directory)\r\n");
             } else {
-                for (int i = 0; i < count; i++) {
-                    if (i == selected) printf("\033[47;30m> ");
-                    else printf("  ");
+                for (int i = 0; i < entry_count; i++) {
+                    if (i == selected) print_str("\033[47;30m> ");
+                    else print_str("  ");
 
-                    if (entries[i].is_dir) printf("\033[34m[DIR ]\033[0m %-20s", entries[i].name);
-                    else printf("\033[32m[FILE]\033[0m %-20s %8ld B", entries[i].name, (long)entries[i].size);
+                    if (entries[i].is_dir) {
+                        print_str("\033[34m[DIR ]\033[0m ");
+                    } else {
+                        print_str("\033[32m[FILE]\033[0m ");
+                    }
+                    print_str(entries[i].name);
 
-                    if (i == selected) printf("\033[0m\n");
-                    else printf("\n");
+                    if (i == selected) print_str("\033[0m\r\n");
+                    else print_str("\r\n");
                 }
             }
 
-            printf("----------------------------------------\n");
-            printf("[w/s] Navegar   [ENTER] Abrir   [q] Sair\n");
-            fflush(stdout);
+            print_str("----------------------------------------\r\n");
+            print_str("[w/s] Navigate   [ENTER] Open   [q] Quit\r\n");
             dirty = 0;
         }
 
-        int c = getchar();
-
-        // Dorme 1 tick no Kernel nativo caso não haja tecla pressionada
-        if (c == EOF || c <= 0) {
-            robu_sleep(1);
+        int c = read_key();
+        if (c < 0) {
+            ipc_sleep(1); // Sleep nativo do microkernel (sem futexes!)
             continue;
         }
 
-        if (c == 'q') break;
+        if (c == 'q' || c == 'Q') break;
 
         if (c == 'w' || c == 'W') {
             if (selected > 0) { selected--; dirty = 1; }
-        }
-        else if (c == 's' || c == 'S') {
-            if (selected < count - 1) { selected++; dirty = 1; }
-        }
-        else if (c == 27) { // Tratamento de Setas
-            robu_sleep(1);
-            int c2 = getchar();
+        } else if (c == 's' || c == 'S') {
+            if (selected < entry_count - 1) { selected++; dirty = 1; }
+        } else if (c == 27) { // Setas ANSI
+            ipc_sleep(1);
+            int c2 = read_key();
             if (c2 == '[') {
-                int c3 = getchar();
+                int c3 = read_key();
                 if (c3 == 'A' && selected > 0) { selected--; dirty = 1; }
-                else if (c3 == 'B' && selected < count - 1) { selected++; dirty = 1; }
+                else if (c3 == 'B' && selected < entry_count - 1) { selected++; dirty = 1; }
             }
-        }
-        else if (c == '\n' || c == '\r') {
-            if (count > 0) {
+        } else if (c == '\n' || c == '\r') {
+            if (entry_count > 0) {
                 if (entries[selected].is_dir) {
-                    if (strcmp(entries[selected].name, "..") == 0) {
-                        char *last = strrchr(path, '/');
-                        if (last == path) *(last+1) = '\0';
-                        else if (last != NULL) *last = '\0';
+                    if (str_eq(entries[selected].name, "..")) {
+                        go_parent(path);
                     } else {
-                        if (strcmp(path, "/") != 0) strcat(path, "/");
-                        strcat(path, entries[selected].name);
+                        if (path[str_len(path) - 1] != '/') str_cat(path, "/", sizeof(path));
+                        str_cat(path, entries[selected].name, sizeof(path));
                     }
                     selected = 0;
                     dirty = 1;
                 } else {
-                    // Visualizador de arquivos
-                    printf("\033[2J\033[H\033[33m--- Lendo: %s ---\033[0m\n\n", entries[selected].name);
-                    char full[2048];
-                    if (strcmp(path, "/") == 0) snprintf(full, sizeof(full), "/%s", entries[selected].name);
-                    else snprintf(full, sizeof(full), "%s/%s", path, entries[selected].name);
-
-                    FILE *f = fopen(full, "r");
-                    if (f) {
-                        char buf[128];
-                        int lines = 0;
-                        while (fgets(buf, sizeof(buf), f) && lines < 20) {
-                            printf("%s", buf);
-                            if (strchr(buf, '\n')) lines++;
-                        }
-                        fclose(f);
-                    } else {
-                        printf("Não foi possível ler o arquivo.\n");
-                    }
-                    printf("\n\n\033[47;30m [ Pressione qualquer tecla para voltar ] \033[0m\n");
-                    fflush(stdout);
-
-                    while (1) {
-                        int k = getchar();
-                        if (k != EOF && k > 0) break;
-                        robu_sleep(1);
-                    }
+                    preview_file(path, entries[selected].name);
                     dirty = 1;
                 }
             }
         }
     }
 
-    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-    printf("\033[2J\033[H");
-    fflush(stdout);
-    return 0;
+    set_raw_mode(0);
+    print_str("\033[2J\033[H");
+    vfs_close(devfs_tid, (uint64_t)console_h);
+    ipc_exit(0);
 }
