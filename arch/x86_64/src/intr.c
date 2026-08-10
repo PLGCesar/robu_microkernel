@@ -87,6 +87,19 @@ void arch_reboot(void) {
     }
 }
 
+void arch_halt(void) {
+    for (;;) {
+        asm volatile("cli; hlt");
+    }
+}
+
+void arch_shutdown(void) {
+    outb(0xF4, 0x00);
+    for (;;) {
+        asm volatile("cli; hlt");
+    }
+}
+
 uint64_t arch_irq_save(void) {
     uint64_t flags;
     asm volatile("pushfq; pop %0; cli" : "=r"(flags) : : "memory");

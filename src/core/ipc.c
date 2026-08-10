@@ -542,8 +542,14 @@ void sys_ipc(void) {
                 f->r13 = sched_stats.timer_traps;
                 f->r14 = sched_stats.kicks_sent;
             } else if (category == 2) {
-
+                kprintf("[power] rebooting\n");
                 arch_reboot();
+            } else if (category == 3) {
+                kprintf("[power] halting\n");
+                arch_halt();
+            } else if (category == 4) {
+                kprintf("[power] shutting down\n");
+                arch_shutdown();
             } else {
                 f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
             }

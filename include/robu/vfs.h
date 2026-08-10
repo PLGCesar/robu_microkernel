@@ -14,6 +14,7 @@
 #define VFS_OP_RENAME  8
 #define VFS_OP_UNLINK  9
 #define VFS_OP_SYMLINK 10
+#define VFS_OP_QUIESCE 11
 #define VFS_ERR_NOT_FOUND     (-1)
 #define VFS_ERR_BAD_HANDLE    (-2)
 #define VFS_ERR_NOT_SUPPORTED (-3)
@@ -115,6 +116,12 @@ _Static_assert(sizeof(vfs_symlink_req_t) == 48, "must fit one msg_regs_t");
 typedef struct {
     int64_t status;
 } vfs_symlink_reply_t;
+typedef struct {
+    uint64_t op;
+} vfs_quiesce_req_t;
+typedef struct {
+    int64_t status;
+} vfs_quiesce_reply_t;
 
 static inline int64_t vfs_mount(const char *prefix) {
     msg_regs_t m = (msg_regs_t){0};
@@ -305,5 +312,20 @@ static inline int64_t vfs_symlink(tid_t server, const char *name, const char *ta
     ipc_call(server, &m, &from);
     vfs_symlink_reply_t *reply = (vfs_symlink_reply_t *)&m;
     return reply->status;
+}
+static inline int64_t vfs_quiesce(tid_t server) {
+    msg_regs_t m = (msg_regs_t){0};
+    vfs_quiesce_req_t *req = (vfs_quiesce_req_t *)&m;
+    req->op = VFS_OP_QUIESCE;
+    tid_t from;
+    ipc_call(server, &m, &from);
+    vfs_quiesce_reply_t *reply = (vfs_quiesce_reply_t *)&m;
+    return reply->status;
+}
+static inline void vfs_quiesce_disk(void) {
+    tid_t diskfs = (tid_t)kinfo_resolve_mount(kinfo_user(), "/mnt/disk0/", NULL);
+    if (diskfs != 0) {
+        vfs_quiesce(diskfs);
+    }
 }
 #endif

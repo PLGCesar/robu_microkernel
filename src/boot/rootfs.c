@@ -158,6 +158,13 @@ void ramfs_usr_seed_init(void) {
     kprintf("[boot] /usr seed: hello_initsys copied into ramfs\n");
 }
 
+void ramfs_sbin_seed_init(void) {
+    seed_binary_copy("reboot", "sbin/reboot");
+    seed_binary_copy("halt", "sbin/halt");
+    seed_binary_copy("shutdown", "sbin/shutdown");
+    kprintf("[boot] /sbin seed: reboot, halt, shutdown copied into ramfs\n");
+}
+
 void ramfs_etc_seed_init(void) {
     const uint8_t *start, *end;
     if (rootfs_lookup("rc.conf", &start, &end) != 0) {
