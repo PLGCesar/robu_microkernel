@@ -68,8 +68,20 @@ static int read_key(void) {
     return -1;
 }
 
+// Leitura com tolerância para sequências ANSI de setas
+static int read_key_wait(int max_tries) {
+    for (int i = 0; i < max_tries; i++) {
+        int k = read_key();
+        if (k >= 0) return k;
+        ipc_sleep(1);
+    }
+    return -1;
+}
+
 // --- ESTRUTURA DO NAVEGADOR ---
-#define MAX_ENTRIES 64
+#define MAX_ENTRIES 128
+#define VISIBLE_ROWS 12 // Número máximo de itens visíveis na tela por vez
+
 typedef struct {
     char name[VFS_NAME_MAX];
     int is_dir;
@@ -167,7 +179,7 @@ static void preview_file(const char *path, const char *filename) {
     }
 }
 
-// --- PONTO DE ENTRADA NATIVO (_start) ---
+// --- PONTO DE ENTRADA NATIVO ---
 void _start(void) {
     devfs_tid = (tid_t)kinfo_user()->devfs_tid;
     console_h = vfs_open(devfs_tid, "console", 0);
@@ -177,6 +189,7 @@ void _start(void) {
 
     char path[VFS_PATH_MAX] = "/";
     int selected = 0;
+    int top_index = 0; // Offset para scroll visual dinâmico
     int dirty = 1;
 
     while (1) {
@@ -184,16 +197,32 @@ void _start(void) {
             load_dir(path);
             if (selected >= entry_count) selected = entry_count > 0 ? entry_count - 1 : 0;
 
+            // Ajusta a janela de scroll visual
+            if (selected < top_index) {
+                top_index = selected;
+            } else if (selected >= top_index + VISIBLE_ROWS) {
+                top_index = selected - VISIBLE_ROWS + 1;
+            }
+
             print_str("\033[2J\033[H");
             print_str("\033[44;37;1m --- Robu Native TUI File Manager --- \033[0m\r\n");
             print_str("\033[36m Path:\033[0m ");
             print_str(path);
-            print_str("\r\n----------------------------------------\r\n");
+            print_str("  (");
+            print_num(entry_count);
+            print_str(" items)\r\n----------------------------------------\r\n");
 
             if (entry_count == 0) {
                 print_str("  (Empty directory)\r\n");
             } else {
-                for (int i = 0; i < entry_count; i++) {
+                int end_index = top_index + VISIBLE_ROWS;
+                if (end_index > entry_count) end_index = entry_count;
+
+                if (top_index > 0) {
+                    print_str("  \033[33m^ ... (scroll up) ...\033[0m\r\n");
+                }
+
+                for (int i = top_index; i < end_index; i++) {
                     if (i == selected) print_str("\033[47;30m> ");
                     else print_str("  ");
 
@@ -207,32 +236,64 @@ void _start(void) {
                     if (i == selected) print_str("\033[0m\r\n");
                     else print_str("\r\n");
                 }
+
+                if (end_index < entry_count) {
+                    print_str("  \033[33mv ... (scroll down) ...\033[0m\r\n");
+                }
             }
 
             print_str("----------------------------------------\r\n");
-            print_str("[w/s] Navigate   [ENTER] Open   [q] Quit\r\n");
+            print_str("[Up/Down/w/s] Nav   [p/Left] Parent   [ENTER/Right] Open   [q] Quit\r\n");
             dirty = 0;
         }
 
         int c = read_key();
         if (c < 0) {
-            ipc_sleep(1); // Sleep nativo do microkernel (sem futexes!)
+            ipc_sleep(1);
             continue;
         }
 
         if (c == 'q' || c == 'Q') break;
 
-        if (c == 'w' || c == 'W') {
+        // Tecla 'p' ou 'P' ou Backspace -> Volta para o diretório PAI
+        if (c == 'p' || c == 'P' || c == 8 || c == 127) {
+            go_parent(path);
+            selected = 0;
+            top_index = 0;
+            dirty = 1;
+        }
+        else if (c == 'w' || c == 'W') {
             if (selected > 0) { selected--; dirty = 1; }
         } else if (c == 's' || c == 'S') {
             if (selected < entry_count - 1) { selected++; dirty = 1; }
-        } else if (c == 27) { // Setas ANSI
-            ipc_sleep(1);
-            int c2 = read_key();
+        } else if (c == 27) { // Tratamento de Setas
+            int c2 = read_key_wait(10);
             if (c2 == '[') {
-                int c3 = read_key();
-                if (c3 == 'A' && selected > 0) { selected--; dirty = 1; }
-                else if (c3 == 'B' && selected < entry_count - 1) { selected++; dirty = 1; }
+                int c3 = read_key_wait(10);
+                if (c3 == 'A' && selected > 0) { // SETA PARA CIMA
+                    selected--; dirty = 1;
+                }
+                else if (c3 == 'B' && selected < entry_count - 1) { // SETA PARA BAIXO
+                    selected++; dirty = 1;
+                }
+                else if (c3 == 'C') { // SETA PARA DIREITA (Abrir)
+                    if (entry_count > 0 && entries[selected].is_dir) {
+                        if (str_eq(entries[selected].name, "..")) {
+                            go_parent(path);
+                        } else {
+                            if (path[str_len(path) - 1] != '/') str_cat(path, "/", sizeof(path));
+                            str_cat(path, entries[selected].name, sizeof(path));
+                        }
+                        selected = 0; top_index = 0; dirty = 1;
+                    } else if (entry_count > 0) {
+                        preview_file(path, entries[selected].name);
+                        dirty = 1;
+                    }
+                }
+                else if (c3 == 'D') { // SETA PARA ESQUERDA (Voltar ao Pai)
+                    go_parent(path);
+                    selected = 0; top_index = 0; dirty = 1;
+                }
             }
         } else if (c == '\n' || c == '\r') {
             if (entry_count > 0) {
@@ -244,6 +305,7 @@ void _start(void) {
                         str_cat(path, entries[selected].name, sizeof(path));
                     }
                     selected = 0;
+                    top_index = 0;
                     dirty = 1;
                 } else {
                     preview_file(path, entries[selected].name);
