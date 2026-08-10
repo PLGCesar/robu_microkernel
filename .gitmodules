@@ -7,3 +7,6 @@
 [submodule "apps/confuse"]
 	path = apps/confuse
 	url = https://github.com/libconfuse/libconfuse.git
+[submodule "apps/uACPI"]
+	path = apps/uACPI
+	url = https://github.com/uACPI/uACPI.git
