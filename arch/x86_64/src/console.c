@@ -263,6 +263,10 @@ void arch_console_set_raw_mode(int enable) {
     console_raw_mode = enable ? 1 : 0;
 }
 
+int arch_console_get_raw_mode(void) {
+    return console_raw_mode;
+}
+
 void arch_console_line_feed(int c) {
     if (console_raw_mode) {
         spin_lock(&console_ring_lock);

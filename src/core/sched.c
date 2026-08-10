@@ -396,6 +396,8 @@ static tcb_t *alloc_tcb(const char *name, uint8_t prio) {
         t->tid = tid;
         t->name = name;
         t->prio = prio;
+        t->pgid = tid;
+        t->sid = tid;
         t->timeslice_left = SCHED_TIMESLICE_TICKS;
         t->last_cpu = (uint32_t)-1;
         arch_fpu_default_state(t->fpu_state);
