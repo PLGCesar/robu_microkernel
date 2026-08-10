@@ -55,6 +55,7 @@ typedef struct {
 #define SYS_INFO_CAT_KILL        6
 #define SYS_INFO_CAT_SIGPROCMASK 7
 #define SYS_INFO_CAT_SIGRETURN   8
+#define SYS_INFO_CAT_SIGPENDING  9
 struct tcb;
 void sig_trampoline_init(void);
 void sig_try_deliver(struct tcb *t);
