@@ -43,7 +43,7 @@ ASM_SRCS := $(wildcard $(ARCH_DIR)/src/*.S)
 
 OBJS := $(C_SRCS:%.c=$(BUILD_DIR)/%.c.o) $(ASM_SRCS:%.S=$(BUILD_DIR)/%.S.o)
 
-.PHONY: all _all clean mlibc minibox run mlibc-hello iso
+.PHONY: all _all clean mlibc minibox run mlibc-hello iso _iso
 
 all:
 	./scripts/identify-os.sh _all
@@ -279,10 +279,17 @@ $(BUILD_DIR)/robu_kernel.iso: $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/rootfs.tar iso
 	cp $(BUILD_DIR)/rootfs.tar $(BUILD_DIR)/iso_root/boot/rootfs.tar
 	sed 's|@QEMU_APPEND@|$(QEMU_APPEND)|' iso/boot/grub/grub.cfg.in \
 	    > $(BUILD_DIR)/iso_root/boot/grub/grub.cfg
-	$(GRUB_DOCKER) run --rm --platform=linux/amd64 -v $(abspath $(BUILD_DIR)):/build $(GRUB_DOCKER_IMAGE) \
-	    bash -c "apt-get update -qq && apt-get install -y -qq grub-pc-bin grub-common xorriso mtools >/dev/null 2>&1 && grub-mkrescue -o /build/robu_kernel.iso /build/iso_root"
+	@if command -v grub-mkrescue >/dev/null 2>&1; then \
+	    grub-mkrescue -o $(BUILD_DIR)/robu_kernel.iso $(BUILD_DIR)/iso_root; \
+	else \
+	    $(GRUB_DOCKER) run --rm --platform=linux/amd64 -v $(abspath $(BUILD_DIR)):/build $(GRUB_DOCKER_IMAGE) \
+	        bash -c "apt-get update -qq && apt-get install -y -qq grub-pc-bin grub-common xorriso mtools >/dev/null 2>&1 && grub-mkrescue -o /build/robu_kernel.iso /build/iso_root"; \
+	fi
 
-iso: $(BUILD_DIR)/robu_kernel.iso
+iso:
+	./scripts/identify-os.sh _iso
+
+_iso: $(BUILD_DIR)/robu_kernel.iso
 
 run: $(BUILD_DIR)/robu_kernel.iso
 	@test -f $(QEMU_DISK) || truncate -s 16M $(QEMU_DISK)
