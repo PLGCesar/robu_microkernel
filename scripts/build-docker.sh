@@ -13,13 +13,13 @@ else
     exit 1
 fi
 
-"$ENGINE" run --rm --platform=linux/amd64 -v "$(pwd)":/work -w /work ubuntu:24.04 \
+IMAGE=robu-builder:latest
+
+"$ENGINE" build --platform=linux/amd64 -t "$IMAGE" -f scripts/robu-builder.Dockerfile . >&2
+
+"$ENGINE" run --rm --platform=linux/amd64 -v "$(pwd)":/work -w /work "$IMAGE" \
     bash -c '
         set -e
-        apt-get update -qq
-        apt-get install -y -qq --no-install-recommends \
-            clang lld llvm make flex bison mtools xorriso grub-pc-bin grub-common \
-            qemu-system-x86 meson libc++-dev libc++abi-dev git >/dev/null
         git config --global --add safe.directory /work
         make BUILD_SYS=clang "$@"
     ' _ "$@"
