@@ -7,31 +7,28 @@
 static tid_t devfs_tid = 0;
 static int64_t console_h = -1;
 
-/* Helpers de E/S e Formatação de Texto */
-static int str_len(const char *s) {
-    int l = 0;
-    while (s[l]) l++;
-    return l;
-}
+/* Framebuffer Local para envio atômico em 1 única mensagem IPC */
+static char frame_buf[4096];
+static int frame_len = 0;
 
-static void print_str(const char *s) {
-    uint64_t len = (uint64_t)str_len(s);
-    if (len > 0 && console_h >= 0) {
-        vfs_write(devfs_tid, (uint64_t)console_h, s, len);
+static void buf_str(const char *s) {
+    int l = 0;
+    while (s[l] && frame_len < (int)sizeof(frame_buf) - 1) {
+        frame_buf[frame_len++] = s[l++];
     }
 }
 
-static void print_num(uint64_t n) {
-    if (n == 0) { print_str("0"); return; }
+static void buf_num(uint64_t n) {
+    if (n == 0) { buf_str("0"); return; }
     char buf[24], rev[24];
     int r = 0, p = 0;
     while (n > 0) { rev[r++] = '0' + (n % 10); n /= 10; }
     while (r > 0) buf[p++] = rev[--r];
     buf[p] = '\0';
-    print_str(buf);
+    buf_str(buf);
 }
 
-static void print_pad_num(uint64_t n, int width) {
+static void buf_pad_num(uint64_t n, int width) {
     char buf[24], rev[24];
     int r = 0, p = 0;
     if (n == 0) {
@@ -40,22 +37,30 @@ static void print_pad_num(uint64_t n, int width) {
         while (n > 0) { rev[r++] = '0' + (n % 10); n /= 10; }
     }
     int spaces = width - r;
-    while (spaces-- > 0) print_str(" ");
+    while (spaces-- > 0) buf_str(" ");
     while (r > 0) buf[p++] = rev[--r];
     buf[p] = '\0';
-    print_str(buf);
+    buf_str(buf);
 }
 
-static void print_pad_str(const char *s, int width) {
-    int len = str_len(s);
-    print_str(s);
+static void buf_pad_str(const char *s, int width) {
+    int len = 0;
+    while (s[len]) len++;
+    buf_str(s);
     int spaces = width - len;
-    while (spaces-- > 0) print_str(" ");
+    while (spaces-- > 0) buf_str(" ");
+}
+
+static void flush_frame(void) {
+    if (frame_len > 0 && console_h >= 0) {
+        vfs_write(devfs_tid, (uint64_t)console_h, frame_buf, frame_len);
+    }
+    frame_len = 0;
 }
 
 static void set_raw_mode(int enable) {
     msg_regs_t m = (msg_regs_t){0};
-    m.word[0] = 10; // SYS_INFO_CAT_CONSOLE_MODE
+    m.word[0] = 10;
     m.word[1] = enable ? 1 : 0;
     robu_ipc_raw(0, 0, IPC_FLAG_SYS_INFO, &m, NULL);
 }
@@ -117,26 +122,27 @@ static int get_thread_info(uint32_t tid, uint64_t *state, uint64_t *prio,
 }
 
 static void render_top(void) {
-    print_str("\033[0m\033[2J\033[H");
-    print_str("\033[44;37;1m --- Robu Microkernel Task Manager (top) --- \033[0m\r\n");
+    frame_len = 0;
 
-    /* Uptime e Dados de Clock */
+    /* Cursor Home (Sobrescrita Flicker-Free sem apagar a tela) */
+    buf_str("\033[H");
+    buf_str("\033[44;37;1m --- Robu Microkernel Task Manager (top) --- \033[0m\033[K\r\n");
+
     const volatile kinfo_page_t *k = kinfo_user();
     uint64_t ticks = kinfo_read_ticks(k);
     uint32_t hz = k->clock_hz ? k->clock_hz : 100;
     uint64_t uptime_sec = ticks / hz;
 
-    print_str("\033[36mUptime:\033[0m ");
-    print_num(uptime_sec);
-    print_str("s (");
-    print_num(ticks);
-    print_str(" ticks) | \033[36mHZ:\033[0m ");
-    print_num(hz);
-    print_str(" | \033[36mCPUs:\033[0m ");
-    print_num(k->cpu_count);
-    print_str("\r\n");
+    buf_str("\033[36mUptime:\033[0m ");
+    buf_num(uptime_sec);
+    buf_str("s (");
+    buf_num(ticks);
+    buf_str(" ticks) | \033[36mHZ:\033[0m ");
+    buf_num(hz);
+    buf_str(" | \033[36mCPUs:\033[0m ");
+    buf_num(k->cpu_count);
+    buf_str("\033[K\r\n");
 
-    /* Informações de Memória (PMM) */
     msg_regs_t mem_q = (msg_regs_t){0};
     mem_q.word[0] = 0; 
     robu_ipc_raw(0, 0, IPC_FLAG_SYS_INFO, &mem_q, NULL);
@@ -147,32 +153,31 @@ static void render_top(void) {
     uint64_t free_kib = (free_frames * 4096) / 1024;
     uint64_t used_kib = total_kib > free_kib ? total_kib - free_kib : 0;
 
-    print_str("\033[36mMem:\033[0m ");
-    print_num(total_kib);
-    print_str(" KiB total | \033[32m");
-    print_num(free_kib);
-    print_str(" KiB free\033[0m | \033[33m");
-    print_num(used_kib);
-    print_str(" KiB used\033[0m\r\n");
+    buf_str("\033[36mMem:\033[0m ");
+    buf_num(total_kib);
+    buf_str(" KiB total | \033[32m");
+    buf_num(free_kib);
+    buf_str(" KiB free\033[0m | \033[33m");
+    buf_num(used_kib);
+    buf_str(" KiB used\033[0m\033[K\r\n");
 
-    /* Estatísticas do Escalonador */
     msg_regs_t sched_q = (msg_regs_t){0};
     sched_q.word[0] = 1; 
     robu_ipc_raw(0, 0, IPC_FLAG_SYS_INFO, &sched_q, NULL);
-    print_str("\033[36mSched:\033[0m Switches: ");
-    print_num(sched_q.word[0]);
-    print_str(" | Preempts: ");
-    print_num(sched_q.word[1]);
-    print_str(" | IPC Msgs: ");
-    print_num(sched_q.word[2]);
-    print_str("\r\n");
+    buf_str("\033[36mSched:\033[0m Switches: ");
+    buf_num(sched_q.word[0]);
+    buf_str(" | Preempts: ");
+    buf_num(sched_q.word[1]);
+    buf_str(" | IPC Msgs: ");
+    buf_num(sched_q.word[2]);
+    buf_str("\033[K\r\n");
 
-    print_str("------------------------------------------------------------\r\n");
-    print_str("\033[1mTID   NAME            STATE       PRIO  PARENT  EXIT\033[0m\r\n");
-    print_str("------------------------------------------------------------\r\n");
+    buf_str("------------------------------------------------------------\033[K\r\n");
+    buf_str("\033[1mTID   NAME            STATE       PRIO  PARENT  EXIT\033[0m\033[K\r\n");
+    buf_str("------------------------------------------------------------\033[K\r\n");
 
-    /* Varredura da Tabela de Threads */
     int active_count = 0;
+    int lines_rendered = 0;
     for (uint32_t tid = 1; tid < 64; tid++) {
         uint64_t state, prio, parent_tid;
         int64_t exit_status;
@@ -183,32 +188,42 @@ static void render_top(void) {
         }
 
         active_count++;
+        lines_rendered++;
 
-        print_pad_num(tid, 4);
-        print_str("  ");
+        buf_pad_num(tid, 4);
+        buf_str("  ");
 
-        print_pad_str(name, 16);
+        buf_pad_str(name, 16);
 
-        if (state == 0) print_str("\033[32m");      // RUNNING = Verde
-        else if (state == 1) print_str("\033[36m"); // READY = Ciano
-        else if (state == 8) print_str("\033[31m"); // ZOMBIE = Vermelho
-        else print_str("\033[37m");
+        if (state == 0) buf_str("\033[32m");      
+        else if (state == 1) buf_str("\033[36m"); 
+        else if (state == 8) buf_str("\033[31m"); 
+        else buf_str("\033[37m");
 
-        print_pad_str(state_to_str(state), 12);
-        print_str("\033[0m");
+        buf_pad_str(state_to_str(state), 12);
+        buf_str("\033[0m");
 
-        print_pad_num(prio, 4);
-        print_str("  ");
-        print_pad_num(parent_tid, 6);
-        print_str("  ");
-        print_num((uint64_t)exit_status);
-        print_str("\r\n");
+        buf_pad_num(prio, 4);
+        buf_str("  ");
+        buf_pad_num(parent_tid, 6);
+        buf_str("  ");
+        buf_num((uint64_t)exit_status);
+        buf_str("\033[K\r\n");
     }
 
-    print_str("------------------------------------------------------------\r\n");
-    print_str("Active Threads: ");
-    print_num(active_count);
-    print_str("  |  [q] Quit   [r] Refresh Now\r\n");
+    /* Limpa linhas restantes da tela se processos morrerem */
+    while (lines_rendered < 15) {
+        buf_str("\033[K\r\n");
+        lines_rendered++;
+    }
+
+    buf_str("------------------------------------------------------------\033[K\r\n");
+    buf_str("Active Threads: ");
+    buf_num(active_count);
+    buf_str("  |  [q] Quit   [r] Refresh Now\033[K\r\n");
+
+    /* Envia o quadro inteiro em 1 única chamada IPC atômica */
+    flush_frame();
 }
 
 void _start(void) {
@@ -217,6 +232,11 @@ void _start(void) {
     if (console_h < 0) ipc_exit(1);
 
     set_raw_mode(1);
+
+    /* Limpeza inicial única */
+    frame_len = 0;
+    buf_str("\033[0m\033[2J\033[H");
+    flush_frame();
 
     int timer = 0;
     render_top();
@@ -229,15 +249,18 @@ void _start(void) {
             timer = 0;
         }
 
-        ipc_sleep(10); // Sleep nativo de 100ms
+        ipc_sleep(10);
         timer++;
-        if (timer >= 10) { // Atualização automática a cada 1 segundo (10x100ms)
+        if (timer >= 10) {
             render_top();
             timer = 0;
         }
     }
 
-    print_str("\033[0m\033[2J\033[H");
+    frame_len = 0;
+    buf_str("\033[0m\033[2J\033[H");
+    flush_frame();
+
     set_raw_mode(0);
     vfs_close(devfs_tid, (uint64_t)console_h);
     ipc_exit(0);
