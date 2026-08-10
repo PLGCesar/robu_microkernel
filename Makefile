@@ -43,7 +43,7 @@ ASM_SRCS := $(wildcard $(ARCH_DIR)/src/*.S)
 
 OBJS := $(C_SRCS:%.c=$(BUILD_DIR)/%.c.o) $(ASM_SRCS:%.S=$(BUILD_DIR)/%.S.o)
 
-.PHONY: all _all clean mlibc minibox run mlibc-hello iso _iso
+.PHONY: all _all clean mlibc _mlibc minibox run mlibc-hello iso _iso
 
 all:
 	./scripts/identify-os.sh _all
@@ -132,6 +132,9 @@ MLIBC_CROSS := apps/mlibc-robu-cross.ini
 MLIBC_TOOLCHAIN_PATH := /opt/homebrew/opt/llvm/bin:$(PATH)
 
 mlibc:
+	./scripts/identify-os.sh _mlibc
+
+_mlibc:
 	@if [ ! -f $(MLIBC_BUILD_DIR)/build.ninja ]; then \
 	    PATH="$(MLIBC_TOOLCHAIN_PATH)" meson setup $(MLIBC_BUILD_DIR) $(MLIBC_DIR) --cross-file $(MLIBC_CROSS) \
 	        -Dlibgcc_dependency=false -Ddefault_library=static --prefix=/usr; \
