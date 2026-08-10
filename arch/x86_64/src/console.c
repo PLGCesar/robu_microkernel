@@ -49,65 +49,108 @@ static char pending_bytes[4];
 static int pending_len = 0;
 static int pending_pos = 0;
 
-// --- CONFIGURAÇÃO DO DRIVER VGA COM SCROLLBACK HISTÓRICO ---
+// --- ESTRUTURA VGA OTIMIZADA COM SCROLLBACK HISTÓRICO ---
 #define VGA_COLS 80
 #define VGA_ROWS 25
-#define VGA_HISTORY_ROWS 200 // Guarda até 200 linhas de histórico do terminal!
+#define VGA_HISTORY_MAX 200 // 200 linhas de histórico na RAM
 #define DEFAULT_ATTR 0x07
 
 static volatile uint16_t *const vga_mem = (volatile uint16_t *)0xB8000;
-static uint16_t vga_history[VGA_HISTORY_ROWS][VGA_COLS];
-static int history_head = 0; // Linha atual do histórico
-static int vga_col = 0;
-static int view_offset = 0;  // Offset de rolagem (0 = ao vivo no fim, >0 = rolado pra cima)
-static uint8_t vga_attr = DEFAULT_ATTR;
 
+// Tela ativa ao vivo (25 linhas)
+static uint16_t live_screen[VGA_ROWS][VGA_COLS];
+static int live_row = 0;
+static int live_col = 0;
+
+// Buffer do Histórico para linhas que saíram do topo
+static uint16_t history_buf[VGA_HISTORY_MAX][VGA_COLS];
+static int history_head = 0; 
+static int view_offset = 0;  // 0 = visão ao vivo (fim), >0 = rolado pra cima no histórico
+
+static uint8_t vga_attr = DEFAULT_ATTR;
 static int ansi_state = 0;
 static int ansi_param = 0;
 
-// Renderiza o buffer físico 0xB8000 com base na posição do scroll (view_offset)
-static void vga_flush(void) {
-    int total_avail = history_head < VGA_HISTORY_ROWS ? history_head + 1 : VGA_HISTORY_ROWS;
-    int max_offset = total_avail > VGA_ROWS ? total_avail - VGA_ROWS : 0;
-
-    if (view_offset > max_offset) view_offset = max_offset;
-    if (view_offset < 0) view_offset = 0;
-
-    int end_row = history_head - view_offset;
-    int start_row = end_row - (VGA_ROWS - 1);
-
-    for (int r = 0; r < VGA_ROWS; r++) {
-        int h_row = start_row + r;
-        if (h_row < 0) {
-            for (int c = 0; c < VGA_COLS; c++) {
-                vga_mem[r * VGA_COLS + c] = (uint16_t)((vga_attr << 8) | ' ');
-            }
-        } else {
-            int ring_idx = h_row % VGA_HISTORY_ROWS;
-            for (int c = 0; c < VGA_COLS; c++) {
-                vga_mem[r * VGA_COLS + c] = vga_history[ring_idx][c];
-            }
-        }
-    }
-
-    // Atualiza o Cursor de Hardware se estivermos na visão ao vivo
+static void update_cursor(void) {
     if (view_offset == 0) {
-        uint16_t pos = (uint16_t)((VGA_ROWS - 1) * VGA_COLS + vga_col);
+        uint16_t pos = (uint16_t)(live_row * VGA_COLS + live_col);
         outb(0x3D4, 0x0F); outb(0x3D5, (uint8_t)(pos & 0xFF));
         outb(0x3D4, 0x0E); outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
     }
 }
 
-static void vga_clear(void) {
-    for (int r = 0; r < VGA_HISTORY_ROWS; r++) {
+// Redesenha a memória física 0xB8000 APENAS quando o scroll é ativado ou no Newline
+static void render_screen(void) {
+    if (view_offset == 0) {
+        for (int r = 0; r < VGA_ROWS; r++) {
+            for (int c = 0; c < VGA_COLS; c++) {
+                vga_mem[r * VGA_COLS + c] = live_screen[r][c];
+            }
+        }
+        update_cursor();
+        return;
+    }
+
+    int total_history = history_head < VGA_HISTORY_MAX ? history_head : VGA_HISTORY_MAX;
+    if (view_offset > total_history) view_offset = total_history;
+    if (view_offset < 0) view_offset = 0;
+
+    for (int r = 0; r < VGA_ROWS; r++) {
+        int target_line = (total_history + r) - view_offset;
+        
+        if (target_line < 0) {
+            for (int c = 0; c < VGA_COLS; c++) vga_mem[r * VGA_COLS + c] = (uint16_t)((vga_attr << 8) | ' ');
+        } else if (target_line < total_history) {
+            int hist_idx = (history_head - total_history + target_line + VGA_HISTORY_MAX) % VGA_HISTORY_MAX;
+            for (int c = 0; c < VGA_COLS; c++) vga_mem[r * VGA_COLS + c] = history_buf[hist_idx][c];
+        } else {
+            int live_r = target_line - total_history;
+            if (live_r < VGA_ROWS) {
+                for (int c = 0; c < VGA_COLS; c++) vga_mem[r * VGA_COLS + c] = live_screen[live_r][c];
+            } else {
+                for (int c = 0; c < VGA_COLS; c++) vga_mem[r * VGA_COLS + c] = (uint16_t)((vga_attr << 8) | ' ');
+            }
+        }
+    }
+}
+
+static void live_scroll_up(void) {
+    // Salva a linha 0 que vai subir para o histórico
+    int hist_idx = history_head % VGA_HISTORY_MAX;
+    for (int c = 0; c < VGA_COLS; c++) {
+        history_buf[hist_idx][c] = live_screen[0][c];
+    }
+    history_head++;
+
+    // Desloca linhas 1..24 para 0..23
+    for (int r = 1; r < VGA_ROWS; r++) {
         for (int c = 0; c < VGA_COLS; c++) {
-            vga_history[r][c] = (uint16_t)((vga_attr << 8) | ' ');
+            live_screen[r - 1][c] = live_screen[r][c];
+        }
+    }
+    // Limpa a última linha
+    for (int c = 0; c < VGA_COLS; c++) {
+        live_screen[VGA_ROWS - 1][c] = (uint16_t)((vga_attr << 8) | ' ');
+    }
+    live_row = VGA_ROWS - 1;
+}
+
+static void vga_clear(void) {
+    for (int r = 0; r < VGA_ROWS; r++) {
+        for (int c = 0; c < VGA_COLS; c++) {
+            live_screen[r][c] = (uint16_t)((vga_attr << 8) | ' ');
+        }
+    }
+    for (int r = 0; r < VGA_HISTORY_MAX; r++) {
+        for (int c = 0; c < VGA_COLS; c++) {
+            history_buf[r][c] = (uint16_t)((vga_attr << 8) | ' ');
         }
     }
     history_head = 0;
-    vga_col = 0;
+    live_row = 0;
+    live_col = 0;
     view_offset = 0;
-    vga_flush();
+    render_screen();
 }
 
 static void apply_ansi_color(int code) {
@@ -150,33 +193,47 @@ static void vga_putc(char c) {
     }
 
     if (c == '\n') {
-        vga_col = 0;
-        history_head++;
-        int h = history_head % VGA_HISTORY_ROWS;
-        for (int i = 0; i < VGA_COLS; i++) vga_history[h][i] = (uint16_t)((vga_attr << 8) | ' ');
-        vga_flush();
+        live_col = 0;
+        if (++live_row >= VGA_ROWS) {
+            live_scroll_up();
+        }
+        if (view_offset == 0) render_screen();
         return;
     }
     if (c == '\r') {
-        vga_col = 0;
-        vga_flush();
+        live_col = 0;
+        if (view_offset == 0) update_cursor();
         return;
     }
     if (c == '\b') {
-        if (vga_col > 0) vga_col--;
-        vga_history[history_head % VGA_HISTORY_ROWS][vga_col] = (uint16_t)((vga_attr << 8) | ' ');
-        vga_flush();
+        if (live_col > 0) live_col--;
+        live_screen[live_row][live_col] = (uint16_t)((vga_attr << 8) | ' ');
+        if (view_offset == 0) {
+            vga_mem[live_row * VGA_COLS + live_col] = live_screen[live_row][live_col];
+            update_cursor();
+        }
         return;
     }
 
-    vga_history[history_head % VGA_HISTORY_ROWS][vga_col] = (uint16_t)((vga_attr << 8) | (uint8_t)c);
-    if (++vga_col >= VGA_COLS) {
-        vga_col = 0;
-        history_head++;
-        int h = history_head % VGA_HISTORY_ROWS;
-        for (int i = 0; i < VGA_COLS; i++) vga_history[h][i] = (uint16_t)((vga_attr << 8) | ' ');
+    // ESCRITA INSTANTÂNEA: Grava exatamente 1 Word na memória física do vídeo!
+    uint16_t val = (uint16_t)((vga_attr << 8) | (uint8_t)c);
+    live_screen[live_row][live_col] = val;
+    
+    if (view_offset == 0) {
+        vga_mem[live_row * VGA_COLS + live_col] = val;
     }
-    vga_flush();
+
+    if (++live_col >= VGA_COLS) {
+        live_col = 0;
+        if (++live_row >= VGA_ROWS) {
+            live_scroll_up();
+            if (view_offset == 0) render_screen();
+        } else {
+            if (view_offset == 0) update_cursor();
+        }
+    } else {
+        if (view_offset == 0) update_cursor();
+    }
 }
 
 static int extended_key_to_ansi(uint8_t scancode) {
@@ -230,19 +287,17 @@ static int ps2_getc(void) {
     if (extended_pending) {
         extended_pending = 0;
 
-        // INTERCEPTAÇÃO DE SCROLL DO TERMINAL FORA DO AM:
-        // Page Up (0x49) ou Shift + Seta Cima (0x48)
+        // SCROLL DO TERMINAL (PageUp / PageDown / Shift+Up / Shift+Down)
         if (scancode == 0x49 || (shift_pressed && scancode == 0x48)) {
             view_offset += 5;
-            vga_flush();
-            return -1; // Não envia tecla pra shell
+            render_screen();
+            return -1;
         }
-        // Page Down (0x51) ou Shift + Seta Baixo (0x50)
         if (scancode == 0x51 || (shift_pressed && scancode == 0x50)) {
             view_offset -= 5;
             if (view_offset < 0) view_offset = 0;
-            vga_flush();
-            return -1; // Não envia tecla pra shell
+            render_screen();
+            return -1;
         }
 
         if (console_raw_mode && extended_key_to_ansi(scancode)) {
@@ -252,10 +307,10 @@ static int ps2_getc(void) {
         return -1;
     }
 
-    // Se o usuário digitou qualquer caractere comum, volta a tela pra visão ao vivo
+    // Se o usuário digitou uma tecla normal, volta o scroll pra visão ao vivo imediatamente
     if (view_offset != 0) {
         view_offset = 0;
-        vga_flush();
+        render_screen();
     }
 
     if (scancode < 128) {
