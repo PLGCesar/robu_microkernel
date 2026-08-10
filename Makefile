@@ -43,14 +43,12 @@ ASM_SRCS := $(wildcard $(ARCH_DIR)/src/*.S)
 
 OBJS := $(C_SRCS:%.c=$(BUILD_DIR)/%.c.o) $(ASM_SRCS:%.S=$(BUILD_DIR)/%.S.o)
 
-.PHONY: all clean mlibc minibox run mlibc-hello iso dispatch
+.PHONY: all _all clean mlibc minibox run mlibc-hello iso
 
-.DEFAULT_GOAL := dispatch
+all:
+	./scripts/identify-os.sh _all
 
-dispatch:
-	./scripts/identify-os.sh all
-
-all: $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/rootfs.tar
+_all: $(BUILD_DIR)/$(TARGET) $(BUILD_DIR)/rootfs.tar
 
 clean:
 	rm -rf $(BUILD_DIR)
