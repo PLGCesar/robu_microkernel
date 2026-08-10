@@ -5,6 +5,7 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <signal.h>
 
 static void fork_and_pipe_test(void) {
     int fds[2];
@@ -114,6 +115,44 @@ static void spawn_pipeline_test(void) {
            WIFEXITED(status) ? WEXITSTATUS(status) : -1);
 }
 
+static volatile sig_atomic_t sig_handler_hits = 0;
+
+static void test_sig_handler(int signum) {
+    if (signum == SIGUSR1) {
+        sig_handler_hits++;
+    }
+}
+
+static void sigaction_test(void) {
+    struct sigaction act;
+    memset(&act, 0, sizeof(act));
+    act.sa_handler = test_sig_handler;
+    if (sigaction(SIGUSR1, &act, NULL) != 0) {
+        printf("sigaction test: sigaction() failed: %s\n", strerror(errno));
+        return;
+    }
+
+    raise(SIGUSR1);
+    printf("sigaction test: after raise(), handler hits=%d (expect 1)\n", sig_handler_hits);
+
+    sigset_t block_set;
+    sigemptyset(&block_set);
+    sigaddset(&block_set, SIGUSR1);
+    sigprocmask(SIG_BLOCK, &block_set, NULL);
+
+    raise(SIGUSR1);
+    printf("sigaction test: after raise() while blocked, handler hits=%d (expect still 1)\n",
+           sig_handler_hits);
+
+    sigset_t pending;
+    sigpending(&pending);
+    printf("sigaction test: sigismember(pending, SIGUSR1)=%d (expect 1)\n",
+           sigismember(&pending, SIGUSR1));
+
+    sigprocmask(SIG_UNBLOCK, &block_set, NULL);
+    printf("sigaction test: after unblock, handler hits=%d (expect 2)\n", sig_handler_hits);
+}
+
 int main(int argc, char **argv) {
     printf("hello from mlibc on robu\n");
     for (int i = 0; i < argc; i++) {
@@ -166,6 +205,7 @@ int main(int argc, char **argv) {
     fork_and_pipe_test();
     spawn_pipeline_test();
     exec_test();
+    sigaction_test();
 
     printf("mlibc-hello: all checks done\n");
     return 0;

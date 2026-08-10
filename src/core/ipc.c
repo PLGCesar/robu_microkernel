@@ -596,6 +596,9 @@ void sys_ipc(void) {
                 cur->sig_mask = cur->saved_sig_mask;
                 cur->in_sig_handler = 0;
                 return;
+            } else if (category == SYS_INFO_CAT_SIGPENDING) {
+                f->r8 = cur->sig_pending;
+                f->rax = (uint64_t)IPC_ERR_NONE;
             } else {
                 f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
             }
