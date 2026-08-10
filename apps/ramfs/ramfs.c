@@ -2,21 +2,13 @@
 #include "robu/uipc.h"
 #include "robu/vfs.h"
 
-// --- ALOCADOR DINÂMICO USANDO DEMAND PAGING ---
-// Usamos um endereço alto do espaço de usuário. Sempre que o RAMFS tocar nessa
-// memória, o "pager" do Robu intercepta o Page Fault, aloca um Frame Físico
-// e mapeia dinamicamente. Genial e evita disperdicio de RAM!
 static vaddr_t heap_bump = 0x40000000ULL; 
 
+// Alocação Ultra-Rápida: Deixa o Page Fault acontecer natural e puramente sob demanda!
 static void *ram_alloc(size_t sz) {
-    sz = (sz + 7) & ~7ULL; // Alinhamento de 8 bytes
+    sz = (sz + 7) & ~7ULL;
     void *ptr = (void*)heap_bump;
     heap_bump += sz;
-    // Força page fault para garantir mapeamento
-    for (size_t i = 0; i < sz; i += 4096) {
-        volatile uint8_t *p = (volatile uint8_t *)((uint64_t)ptr + i);
-        *p = 0;
-    }
     return ptr;
 }
 
@@ -29,7 +21,6 @@ typedef struct {
     char target[VFS_PATH_MAX];
     uint64_t size;
     
-    // Dados agora são totalmente dinâmicos!
     uint64_t capacity;
     uint8_t *data;
 } ramfs_file_t;
@@ -40,7 +31,6 @@ typedef struct {
     uint64_t offset;
 } ramfs_handle_t;
 
-// Listas e capacidades que crescem infinitamente
 static ramfs_file_t *files = NULL;
 static uint32_t max_files = 0;
 
@@ -84,7 +74,6 @@ static int alloc_file(void) {
     for (uint32_t i = 0; i < max_files; i++) {
         if (!files[i].in_use) return i;
     }
-    // Expansão dinâmica
     uint32_t new_max = max_files == 0 ? 64 : max_files * 2;
     ramfs_file_t *new_files = (ramfs_file_t*)ram_alloc(new_max * sizeof(ramfs_file_t));
     if (files) {
@@ -176,7 +165,7 @@ static void handle_open(msg_regs_t *m) {
         set_name(files[fidx].name, name, sizeof(files[fidx].name));
         files[fidx].parent_ino = resolve_parent_ino(name);
     } else if (flags & VFS_O_TRUNC) {
-        files[fidx].size = 0; // Nós não limpamos a RAM alocada pois num proto de microkernel ta safe
+        files[fidx].size = 0;
     }
     int hidx = alloc_handle();
     handles[hidx].in_use = 1;
@@ -217,14 +206,18 @@ static void handle_write(msg_regs_t *m) {
     ramfs_handle_t *hd = &handles[h];
     ramfs_file_t *f = &files[hd->file_idx];
     
-    // Expansão dinâmica do arquivo sob demanda (Demand Paging fará a mágica física)
+    // Otimização: Crescimento em blocos de 4KB com cópia em Palavras de 64-bits
     if (hd->offset + len > f->capacity) {
         uint64_t new_cap = f->capacity == 0 ? 4096 : f->capacity * 2;
         while (new_cap < hd->offset + len) new_cap *= 2;
         
         uint8_t *new_data = (uint8_t*)ram_alloc(new_cap);
-        if (f->data) {
-            for (uint64_t i = 0; i < f->size; i++) new_data[i] = f->data[i];
+        if (f->data && f->size > 0) {
+            uint64_t *src64 = (uint64_t*)f->data;
+            uint64_t *dst64 = (uint64_t*)new_data;
+            uint64_t words = f->size / 8;
+            for (uint64_t i = 0; i < words; i++) dst64[i] = src64[i];
+            for (uint64_t i = words * 8; i < f->size; i++) new_data[i] = f->data[i];
         }
         f->data = new_data;
         f->capacity = new_cap;
@@ -272,7 +265,7 @@ static void handle_fstat(msg_regs_t *m) {
     reply->status = 0;
     reply->size = files[handles[h].file_idx].size;
     reply->is_dir = (uint64_t)files[handles[h].file_idx].is_dir;
-    reply->ino = (uint64_t)handles[h].file_idx + 2;
+    reply->ino = (uint64_t)files[handles[h].file_idx].is_dir;
 }
 
 static void handle_readdir(msg_regs_t *m) {
