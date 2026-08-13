@@ -28,6 +28,7 @@
 #define VFS_ERR_EXISTS        (-6)
 #define VFS_ERR_NOT_DIR       (-7)
 #define VFS_ERR_NOT_EMPTY     (-8)
+#define VFS_ERR_WOULDBLOCK    (-10)
 #define VFS_NAME_MAX  20
 #define VFS_PATH_MAX  32
 #define VFS_READ_MAX  40

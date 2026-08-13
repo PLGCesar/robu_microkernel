@@ -2,6 +2,7 @@
 #include "robu/signal.h"
 #include "robu/tcb.h"
 #include "robu/sched.h"
+#include "robu/spawn.h"
 #include "robu/vm.h"
 #include "robu/pmm.h"
 #include "robu/arch.h"
@@ -61,8 +62,7 @@ void sig_try_deliver(struct tcb *t) {
     }
     if (sa->handler == ROBU_SIG_DFL) {
         if (sig_default_terminates(signum)) {
-            t->exit_status = (int32_t)(0x80000000u | (uint32_t)signum);
-            sched_terminate_current();
+            spawn_exit_current((int)(0x80000000u | (uint32_t)signum));
         }
         return;
     }

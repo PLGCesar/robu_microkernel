@@ -13,10 +13,76 @@
 #include "robu/arch.h"
 #include "robu/signal.h"
 static tid_t console_writer_tid = 0;
+static tid_t console_fg_pgid = 0;
+#define CONSOLE_VT_COUNT 6
+static tid_t console_read_waiter[CONSOLE_VT_COUNT];
+
+static void complete_console_read(tcb_t *t, int vt) {
+    uint64_t words[5] = {0, 0, 0, 0, 0};
+    int n = arch_console_read_line_bytes(vt, (uint8_t *)words, 40);
+
+    if (n < 0) {
+        return;
+    }
+
+    t->uctx.r8 = (uint64_t)n;
+    t->uctx.r9 = words[0];
+    t->uctx.r10 = words[1];
+    t->uctx.r12 = words[2];
+    t->uctx.r13 = words[3];
+    t->uctx.r14 = words[4];
+    t->uctx.rax = (uint64_t)IPC_ERR_NONE;
+    console_read_waiter[vt] = 0;
+}
+
+void ipc_console_input_available(int vt) {
+    if (vt < 0 || vt >= CONSOLE_VT_COUNT) {
+        return;
+    }
+
+    sched_lock_acquire();
+
+    tid_t tid = console_read_waiter[vt];
+    if (tid != 0) {
+        tcb_t *t = sched_get_tcb(tid);
+        if (t && t->state == THREAD_STATE_WAIT_CONSOLE) {
+            complete_console_read(t, vt);
+            if (console_read_waiter[vt] == 0) {
+                sched_wake(t);
+            }
+        } else {
+            console_read_waiter[vt] = 0;
+        }
+    }
+
+    sched_lock_release();
+}
+
+void ipc_console_interrupt(int vt, int signum) {
+    if (vt < 0 || vt >= CONSOLE_VT_COUNT) {
+        return;
+    }
+
+    sched_lock_acquire();
+
+    tid_t waiter = console_read_waiter[vt];
+    if (waiter != 0) {
+        tcb_t *t = sched_get_tcb(waiter);
+        if (t && t->state == THREAD_STATE_WAIT_CONSOLE) {
+            t->uctx.rax = (uint64_t)IPC_ERR_CANCELED;
+            console_read_waiter[vt] = 0;
+            sched_wake(t);
+        } else {
+            console_read_waiter[vt] = 0;
+        }
+    }
+    sched_signal_pgid(console_fg_pgid, signum);
+    sched_lock_release();
+}
+
 void ipc_grant_console_writer(tid_t tid) {
     console_writer_tid = tid;
 }
-static tid_t console_fg_pgid = 0;
 static tid_t blk_owner_tid = 0;
 void ipc_grant_blk_owner(tid_t tid) {
     blk_owner_tid = tid;
@@ -153,8 +219,30 @@ void sys_ipc(void) {
                 return;
             }
             int vt = (int)f->r8;
+            if (vt < 0 || vt >= CONSOLE_VT_COUNT) {
+                f->rax = (uint64_t)IPC_ERR_NOT_FOUND;
+                return;
+            }
+
             uint64_t words[5] = {0, 0, 0, 0, 0};
             int n = arch_console_read_line_bytes(vt, (uint8_t *)words, 40);
+
+            if (n < 0) {
+                /*
+                 * The console has no complete input yet. Keep the syscall
+                 * suspended and complete its saved register frame when the
+                 * console input path wakes us.
+                 */
+                if (console_read_waiter[vt] != 0) {
+                    f->rax = (uint64_t)IPC_ERR_WOULDBLOCK;
+                    return;
+                }
+
+                console_read_waiter[vt] = cur->tid;
+                sched_block(THREAD_STATE_WAIT_CONSOLE);
+                return;
+            }
+
             f->r8 = (uint64_t)n;
             f->r9 = words[0];
             f->r10 = words[1];

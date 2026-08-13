@@ -149,6 +149,24 @@ void sched_direct_switch(tcb_t *dest) {
 void sched_block(thread_state_t why) {
     current_thread->state = why;
 }
+
+int sched_signal_pgid(tid_t pgid, int signum) {
+    if (pgid == 0) {
+        return -1;
+    }
+
+    int sent = 0;
+    for (tid_t tid = 1; tid < SCHED_MAX_THREADS; tid++) {
+        tcb_t *t = sched_get_tcb(tid);
+        if (!t || t->pgid != pgid) {
+            continue;
+        }
+        if (sig_send(tid, signum) == 0) {
+            sent++;
+        }
+    }
+    return sent;
+}
 static void terminate_tcb(tcb_t *t, thread_state_t final_state) {
     t->state = final_state;
     tcb_t *s = t->send_q_head;

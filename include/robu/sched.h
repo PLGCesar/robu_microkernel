@@ -49,6 +49,7 @@ void sched_wake(tcb_t *t);
 void sched_ready_now(tcb_t *t);
 void sched_direct_switch(tcb_t *dest);
 void sched_block(thread_state_t why);
+int sched_signal_pgid(tid_t pgid, int signum);
 void sched_terminate_current(void);
 void sched_terminate_to(thread_state_t final_state);
 int sched_terminate(tid_t victim_tid);

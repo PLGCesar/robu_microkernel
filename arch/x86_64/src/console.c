@@ -1,6 +1,8 @@
 #include "robu/types.h"
 #include "robu/kprintf.h"
 #include "robu/spinlock.h"
+#include "robu/ipc.h"
+#include "robu/signal.h"
 #include "portio.h"
 
 #define COM1 0x3F8
@@ -441,6 +443,17 @@ int arch_console_get_raw_mode(int vt) {
 
 void arch_console_line_feed(int c) {
     vt_state_t *v = &vts[active_vt];
+    if (c == 0x03) {
+        v->line_len = 0;
+        arch_console_vt_putc(active_vt, '^');
+        arch_console_vt_putc(active_vt, 'C');
+        arch_console_vt_putc(active_vt, '\n');
+        spin_lock(&console_ring_lock);
+        ring_push_locked(v, (char)c);
+        spin_unlock(&console_ring_lock);
+        ipc_console_interrupt(active_vt, SIGINT);
+        return;
+    }
     if (v->raw_mode) {
         spin_lock(&console_ring_lock);
         ring_push_locked(v, (char)c);
@@ -464,6 +477,20 @@ void arch_console_line_feed(int c) {
         }
         ring_push_locked(v, '\n');
         spin_unlock(&console_ring_lock);
+        v->line_len = 0;
+        return;
+    }
+    if (c == 0x04) {
+        spin_lock(&console_ring_lock);
+        if (v->line_len > 0) {
+            for (int i = 0; i < v->line_len; i++) {
+                ring_push_locked(v, v->line_buf[i]);
+            }
+        } else {
+            ring_push_locked(v, (char)c);
+        }
+        spin_unlock(&console_ring_lock);
+        arch_console_vt_putc(active_vt, '\n');
         v->line_len = 0;
         return;
     }

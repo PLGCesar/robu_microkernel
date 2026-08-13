@@ -15,6 +15,8 @@ typedef enum {
 } dev_id_t;
 #define VT_COUNT 6
 #define SYS_INFO_CAT_ACTIVE_VT 16
+#define SYS_INFO_CAT_CONSOLE_MODE 10
+#define VFS_ERR_INTERRUPTED (-9)
 static int name_eq(const char *a, const char *b) {
     for (int i = 0; i < VFS_PATH_MAX; i++) {
         if (a[i] != b[i]) {
@@ -77,6 +79,9 @@ static int devfs_kernel_console_read(int vt, uint8_t *buf, uint64_t max) {
     msg_regs_t m = (msg_regs_t){0};
     m.word[0] = (uint64_t)vt;
     int64_t rc = robu_ipc_raw(0, 0, IPC_FLAG_CONSOLE_READ, &m, NULL);
+    if (rc == IPC_ERR_CANCELED) {
+        return VFS_ERR_INTERRUPTED;
+    }
     if (rc != IPC_ERR_NONE) {
         return -1;
     }
@@ -94,6 +99,51 @@ static int devfs_kernel_console_read(int vt, uint8_t *buf, uint64_t max) {
 #define CONSOLE_LOCAL_BUF_SIZE 64
 static uint8_t console_local_buf[VT_COUNT][CONSOLE_LOCAL_BUF_SIZE];
 static uint32_t console_local_head[VT_COUNT], console_local_tail[VT_COUNT];
+static int console_eof_pending[VT_COUNT];
+static int devfs_console_raw_mode(int vt) {
+    msg_regs_t m = (msg_regs_t){0};
+    m.word[0] = SYS_INFO_CAT_CONSOLE_MODE;
+    m.word[1] = 2;
+    m.word[2] = (uint64_t)vt;
+    robu_ipc_raw(0, 0, IPC_FLAG_SYS_INFO, &m, NULL);
+    return (int)m.word[0];
+}
+static void console_local_discard(int vt) {
+    console_local_head[vt] = 0;
+    console_local_tail[vt] = 0;
+}
+static void console_local_push(int vt, uint8_t byte) {
+    uint32_t next = (console_local_head[vt] + 1) % CONSOLE_LOCAL_BUF_SIZE;
+    if (next == console_local_tail[vt]) {
+        return;
+    }
+    console_local_buf[vt][console_local_head[vt]] = byte;
+    console_local_head[vt] = next;
+}
+static void console_drain(int vt) {
+    if (console_local_head[vt] != console_local_tail[vt]) {
+        return;
+    }
+    uint8_t kbuf[VFS_READ_MAX];
+    int got = devfs_kernel_console_read(vt, kbuf, sizeof(kbuf));
+    if (got <= 0) {
+        return;
+    }
+    int cooked = !devfs_console_raw_mode(vt);
+    for (int i = 0; i < got; i++) {
+        uint8_t byte = kbuf[i];
+        if (byte == 0x03) {
+            console_local_discard(vt);
+            console_eof_pending[vt] = 0;
+            continue;
+        }
+        if (byte == 0x04 && cooked) {
+            console_eof_pending[vt] = 1;
+            continue;
+        }
+        console_local_push(vt, byte);
+    }
+}
 static int rdrand_available;
 static void check_rdrand(void) {
     uint32_t ecx;
@@ -195,21 +245,15 @@ static void handle_read(msg_regs_t *m, tid_t from) {
             reply->status = 0;
             break;
         }
+        console_drain(vt);
         if (console_local_head[vt] == console_local_tail[vt]) {
-            uint8_t kbuf[VFS_READ_MAX];
-            int got = devfs_kernel_console_read(vt, kbuf, sizeof(kbuf));
-            if (got < 0) {
-                reply->status = VFS_ERR_NOT_SUPPORTED;
-                break;
+            if (console_eof_pending[vt]) {
+                console_eof_pending[vt] = 0;
+                reply->status = 0;
+            } else {
+                reply->status = VFS_ERR_WOULDBLOCK;
             }
-            for (int i = 0; i < got; i++) {
-                uint32_t next = (console_local_head[vt] + 1) % CONSOLE_LOCAL_BUF_SIZE;
-                if (next == console_local_tail[vt]) {
-                    break;
-                }
-                console_local_buf[vt][console_local_head[vt]] = kbuf[i];
-                console_local_head[vt] = next;
-            }
+            break;
         }
         int n = 0;
         while ((uint64_t)n < len && console_local_head[vt] != console_local_tail[vt]) {
@@ -250,21 +294,8 @@ static void handle_peek(msg_regs_t *m, tid_t from) {
             reply->status = 0;
             break;
         }
-        if (console_local_head[vt] == console_local_tail[vt]) {
-            uint8_t kbuf[VFS_READ_MAX];
-            int got = devfs_kernel_console_read(vt, kbuf, sizeof(kbuf));
-            if (got > 0) {
-                for (int i = 0; i < got; i++) {
-                    uint32_t next = (console_local_head[vt] + 1) % CONSOLE_LOCAL_BUF_SIZE;
-                    if (next == console_local_tail[vt]) {
-                        break;
-                    }
-                    console_local_buf[vt][console_local_head[vt]] = kbuf[i];
-                    console_local_head[vt] = next;
-                }
-            }
-        }
-        reply->status = console_local_head[vt] != console_local_tail[vt] ? 1 : 0;
+        console_drain(vt);
+        reply->status = (console_local_head[vt] != console_local_tail[vt] || console_eof_pending[vt]) ? 1 : 0;
         break;
     }
     default:

@@ -46,6 +46,8 @@
 #define IPC_ERR_NO_MEM     -6
 void sys_ipc(void);
 void ipc_grant_console_writer(tid_t tid);
+void ipc_console_input_available(int vt);
+void ipc_console_interrupt(int vt, int signum);
 void ipc_grant_blk_owner(tid_t tid);
 void ipc_grant_pager_owner(tid_t tid);
 #endif

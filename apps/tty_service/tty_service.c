@@ -10,12 +10,7 @@
 static int try_open(const char *name) {
     char path[32];
     snprintf(path, sizeof(path), "/dev/%s", name);
-    int fd = open(path, O_RDWR);
-    if (fd < 0) {
-        return -1;
-    }
-    close(fd);
-    return 0;
+    return open(path, O_RDWR);
 }
 
 int main(void) {
@@ -46,18 +41,25 @@ int main(void) {
     }
 
     char chosen[32] = "";
+    int tty_fd = -1;
     if (strcmp(rc_tty, "auto") == 0) {
         static const char *const candidates[] = {
             "rstty1", "rstty2", "rstty3", "rstty4", "rstty5", "rstty6"
         };
         for (int i = 0; i < 6; i++) {
-            if (try_open(candidates[i]) == 0) {
+            int fd = try_open(candidates[i]);
+            if (fd >= 0) {
                 strncpy(chosen, candidates[i], sizeof(chosen) - 1);
+                tty_fd = fd;
                 break;
             }
         }
-    } else if (try_open(rc_tty) == 0) {
-        strncpy(chosen, rc_tty, sizeof(chosen) - 1);
+    } else {
+        int fd = try_open(rc_tty);
+        if (fd >= 0) {
+            strncpy(chosen, rc_tty, sizeof(chosen) - 1);
+            tty_fd = fd;
+        }
     }
 
     if (chosen[0]) {
@@ -65,6 +67,12 @@ int main(void) {
         printf("[tty_service] using /dev/%s\n", chosen);
     } else {
         printf("[tty_service] no tty interface available, running without a tty\n");
+    }
+
+    if (tty_fd >= 0) {
+        setpgid(0, 0);
+        tcsetpgrp(tty_fd, getpgrp());
+        close(tty_fd);
     }
 
     char shell_path[80];

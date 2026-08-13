@@ -19,7 +19,8 @@ typedef enum {
     THREAD_STATE_WAIT_NOTIFICATION,
     THREAD_STATE_DEAD,
     THREAD_STATE_ZOMBIE,
-    THREAD_STATE_WAIT_CHILD
+    THREAD_STATE_WAIT_CHILD,
+    THREAD_STATE_WAIT_CONSOLE
 } thread_state_t;
 typedef struct {
     uint64_t word[6];
