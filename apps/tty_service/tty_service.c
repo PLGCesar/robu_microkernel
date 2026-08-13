@@ -80,7 +80,7 @@ int main(void) {
     setenv("SHELL", shell_path, 1);
 
     char *const argv[] = { rc_shell, NULL };
-    execve(rc_shell, argv, environ);
+    execve(shell_path, argv, environ);
     printf("[tty_service] failed to exec '%s'\n", rc_shell);
     return 1;
 }

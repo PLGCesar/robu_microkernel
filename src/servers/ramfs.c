@@ -275,7 +275,7 @@ static void handle_fstat(msg_regs_t *m) {
     reply->status = 0;
     reply->size = files[handles[h].file_idx].size;
     reply->is_dir = (uint64_t)files[handles[h].file_idx].is_dir;
-    reply->ino = (uint64_t)files[handles[h].file_idx].is_dir;
+    reply->ino = (uint64_t)handles[h].file_idx + 2;
 }
 
 static void handle_readdir(msg_regs_t *m) {
