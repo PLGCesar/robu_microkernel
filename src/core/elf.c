@@ -1,4 +1,5 @@
 #include "robu/elf.h"
+#include "robu/signal.h"
 #include "robu/vm.h"
 #include "robu/pmm.h"
 #include "robu/sched.h"
@@ -302,7 +303,8 @@ tcb_t *elf_load_and_spawn_req(const char *name, const uint8_t *elf_start,
 
 int elf_exec_current(tcb_t *cur, const char *name, const uint8_t *elf_start,
                      const uint8_t *elf_end, int argc, const char *const *argv,
-                     int envc, const char *const *envp) {
+                     int envc, const char *const *envp,
+                     uint32_t nfds, const void *fds_blob) {
     const elf_image_t *img = elf_parse(elf_start, elf_end);
     if (!img) {
         return -1;
@@ -319,7 +321,8 @@ int elf_exec_current(tcb_t *cur, const char *name, const uint8_t *elf_start,
     }
     vaddr_t argv_base = stack_top + PAGE_SIZE_4K;
     vaddr_t envp_base = argv_base + PAGE_SIZE_4K;
-    vaddr_t heap_base = envp_base + PAGE_SIZE_4K;
+    vaddr_t info_base = envp_base + PAGE_SIZE_4K;
+    vaddr_t heap_base = info_base + PAGE_SIZE_4K;
     vaddr_t argv_uva, envp_uva;
     if (build_string_array_page(new_as, argv_base, argc, argv, name, "argv", &argv_uva) != 0) {
         vm_address_space_destroy(new_as);
@@ -329,11 +332,32 @@ int elf_exec_current(tcb_t *cur, const char *name, const uint8_t *elf_start,
         vm_address_space_destroy(new_as);
         return -1;
     }
+    paddr_t info_frame = pmm_alloc(PMM_COLOR_ANY);
+    if (!info_frame) {
+        kprintf("[elf] out of physical memory allocating '%s's spawn-info page\n", name);
+        vm_address_space_destroy(new_as);
+        return -1;
+    }
+    arch_vm_map_page(new_as, info_base, info_frame, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_USER);
+    robu_spawn_info_t *info = (robu_spawn_info_t *)info_frame;
+    info->magic = SPAWN_INFO_MAGIC;
+    info->nfds = nfds;
+    if (nfds > 0) {
+        memcpy(info + 1, fds_blob, (size_t)nfds * sizeof(robu_spawn_fd_t));
+    }
+
     paddr_t old_as = cur->address_space;
     cur->address_space = new_as;
 
+    for (int i = 0; i < ROBU_NSIG; i++) {
+        cur->sig_actions[i].handler = ROBU_SIG_DFL;
+        cur->sig_actions[i].flags = 0;
+        cur->sig_actions[i].mask = 0;
+    }
+    cur->in_sig_handler = 0;
+
     arch_uctx_init_user_argv(&cur->uctx, img->entry, stack_top, (uint64_t)argc, argv_uva,
-                             envp_uva, heap_base, 0);
+                             envp_uva, heap_base, info_base);
 
     arch_vm_activate(new_as);
     vm_address_space_destroy(old_as);

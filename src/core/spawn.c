@@ -173,6 +173,13 @@ int spawn_exec(tcb_t *caller, vaddr_t req_va, uint64_t req_len) {
     if (req->argc > SPAWN_MAX_ARGS || req->envc > SPAWN_MAX_ARGS) {
         return IPC_ERR_NO_CAP;
     }
+    if (req->nfds > SPAWN_FD_INFO_MAX) {
+        return IPC_ERR_NO_CAP;
+    }
+    if (validate_range(req->fds_off, req->nfds * (uint32_t)sizeof(robu_spawn_fd_t),
+                       total_len) != 0) {
+        return IPC_ERR_NO_CAP;
+    }
     char name[SPAWN_NAME_MAX];
     if (copy_name(req, total_len, name, sizeof(name)) != 0) {
         return IPC_ERR_NO_CAP;
@@ -186,13 +193,18 @@ int spawn_exec(tcb_t *caller, vaddr_t req_va, uint64_t req_len) {
                        spawn_strbuf, sizeof(spawn_strbuf), &strbuf_used) != 0) {
         return IPC_ERR_NO_CAP;
     }
+    robu_spawn_fd_t fds[SPAWN_FD_INFO_MAX];
+    if (req->nfds > 0) {
+        memcpy(fds, spawn_scratch + req->fds_off, (size_t)req->nfds * sizeof(robu_spawn_fd_t));
+    }
     const uint8_t *elf_start, *elf_end;
     if (rootfs_lookup(name, &elf_start, &elf_end) != 0) {
         return IPC_ERR_NOT_FOUND;
     }
     if (elf_exec_current(caller, name, elf_start, elf_end,
                          (int)req->argc, (const char *const *)spawn_argv,
-                         (int)req->envc, (const char *const *)spawn_envp) != 0) {
+                         (int)req->envc, (const char *const *)spawn_envp,
+                         req->nfds, fds) != 0) {
         return IPC_ERR_NO_MEM;
     }
     return IPC_ERR_NONE;
